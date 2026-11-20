@@ -36,13 +36,22 @@
     return out;
   }
 
+  /** A real calendar date in YYYY-MM-DD form ('2026-11-31' and free text are refused). */
+  function isDate(d) {
+    if (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+    var p = parts(d);
+    if (p.y < 2020 || p.y > 2100 || p.m < 1 || p.m > 12 || p.d < 1) return false;
+    return fmt(Date.UTC(p.y, p.m - 1, p.d)) === d;
+  }
+  function isTime(t) { return typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t); }
+
   function dateRange(from, to) {
     var out = [];
     for (var d = from; d <= to; d = addDays(d, 1)) out.push(d);
     return out;
   }
 
-  var api = { addDays: addDays, weekday: weekday, monthKey: monthKey, daysInMonth: daysInMonth,
+  var api = { isDate: isDate, isTime: isTime, addDays: addDays, weekday: weekday, monthKey: monthKey, daysInMonth: daysInMonth,
     nthSunday: nthSunday, isRosterOff: isRosterOff, rosterSundaysInMonth: rosterSundaysInMonth, dateRange: dateRange };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJCalendar = api;

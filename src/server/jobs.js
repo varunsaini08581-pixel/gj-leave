@@ -30,17 +30,24 @@
     var people = {}; ctx.db.rows('People').forEach(function (p) { people[p.id] = p; });
     var groups = {};
     ctx.db.rows('Notifications').forEach(function (n) { if (!n.emailedAt) (groups[n.to] = groups[n.to] || []).push(n); });
-    var sent = 0;
+    var sent = 0, marks = [];
     Object.keys(groups).forEach(function (to) {
       var p = people[to], list = groups[to];
       var email = p && (p.email || (p.role === 'owner' ? ctx.env.ownerEmail : ''));
-      if (!email) { list.forEach(function (n) { ctx.db.update('Notifications', n.id, { emailedAt: -1 }); }); return; } // -1 = no address, in-app only
-      if (mailer.quota() < 1) return; // out of quota today: try again on the next run
+      if (!email) { list.forEach(function (n) { marks.push([n.id, -1]); }); return; } // -1 = no address, in-app only
+      var left = 0; try { left = mailer.quota(); } catch (e) { left = 0; }
+      if (left < 1) return; // out of quota today: try again on the next run
       var subject = list.length === 1 ? 'GJ Leave: ' + list[0].title : 'GJ Leave: ' + list.length + ' updates';
-      var body = list.map(function (n) { return '• ' + n.title + (n.body ? '\n  ' + n.body : ''); }).join('\n\n') + '\n\nOpen the app to act on these.';
-      mailer.send(email, subject, body);
-      list.forEach(function (n) { ctx.db.update('Notifications', n.id, { emailedAt: ctx.now }); });
+      var body = list.map(function (n) { return '\u2022 ' + n.title + (n.body ? '\n  ' + n.body : ''); }).join('\n\n') + '\n\nOpen the app to act on these.';
+      try { mailer.send(email, subject, body); }
+      catch (e) { list.forEach(function (n) { marks.push([n.id, -2]); }); return; } // -2 = the address was refused: in-app only, never retried for these
+      list.forEach(function (n) { marks.push([n.id, ctx.now]); });
       sent += 1;
+    });
+    // The marks are written together, on fresh rows, inside the server lock.
+    ctx.env.withLock(function () {
+      if (ctx.db.reset) ctx.db.reset();
+      marks.forEach(function (m) { ctx.db.update('Notifications', m[0], { emailedAt: m[1] }); });
     });
     return sent;
   }
@@ -123,9 +130,9 @@
 
   function run(ctx, job, mailer) {
     if (job === 'emails') return sendEmails(ctx, mailer);
-    if (job === 'hourly') return ctx.env.withLock(function () { return { reminders: reminders(ctx), warnings: warnings(ctx) }; });
-    if (job === 'evening') return ctx.env.withLock(function () { return eveningBefore(ctx); });
-    if (job === 'endOfDay') return endOfDay(ctx);
+    if (job === 'hourly') return ctx.env.withLock(function () { if (ctx.db.reset) ctx.db.reset(); return { reminders: reminders(ctx), warnings: warnings(ctx) }; });
+    if (job === 'evening') return ctx.env.withLock(function () { if (ctx.db.reset) ctx.db.reset(); return eveningBefore(ctx); });
+    if (job === 'endOfDay') return ctx.env.withLock(function () { if (ctx.db.reset) ctx.db.reset(); return endOfDay(ctx); });
     throw new Error('Unknown job ' + job);
   }
 

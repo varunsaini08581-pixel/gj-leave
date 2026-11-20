@@ -24,6 +24,20 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(function () { toastEl.hidden = true; }, isError ? 6000 : 3000);
   }
   function loadSession() { try { return JSON.parse(localStorage.getItem(DEMO ? 'gjleave.demo' : 'gjleave.session')) || {}; } catch (e) { return {}; } }
+  // The phone's approval token is kept apart from the sign-in: after "Sign out" the PIN is needed again,
+  // but the phone stays the approved phone (no new approval from the owner).
+  function loadDevice() { try { return JSON.parse(localStorage.getItem(DEMO ? 'gjleave.demo.device' : 'gjleave.device')) || {}; } catch (e) { return {}; } }
+  function saveDevice(d) { try { localStorage.setItem(DEMO ? 'gjleave.demo.device' : 'gjleave.device', JSON.stringify(d)); } catch (e) { /* stays in memory */ } }
+  function knownToken(personId) {
+    var d = loadDevice();
+    if (d.personId === personId && d.deviceToken) return d.deviceToken;
+    return state.session.personId === personId ? (state.session.deviceToken || null) : null;
+  }
+  function signOut() {
+    if (state.session.deviceToken) saveDevice({ personId: state.session.personId, deviceToken: state.session.deviceToken });
+    saveSession({ personId: state.session.personId });
+    state.me = null;
+  }
   function saveSession(s) { state.session = s; try { localStorage.setItem(DEMO ? 'gjleave.demo' : 'gjleave.session', JSON.stringify(s)); } catch (e) { /* stays in memory */ } }
   function pad(n) { return (n < 10 ? '0' : '') + n; }
   function ist(ms) { return new Date(ms + 19800000); }
@@ -84,9 +98,10 @@
     var sel = h('select', { id: 'who' }), pin = h('input', { id: 'pin', type: 'password', inputmode: 'numeric', autocomplete: 'off', maxlength: 6, placeholder: '4 to 6 digits' });
     var msg = h('div', {});
     var btn = button('Sign in', 'primary', function () {
-      return run(api('login', { personId: sel.value, pin: pin.value, deviceToken: state.session.personId === sel.value ? state.session.deviceToken : null, deviceLabel: navigator.userAgent.slice(0, 80) })).then(function (r) {
-        if (r.deviceToken) saveSession({ personId: sel.value, deviceToken: r.deviceToken });
-        else saveSession({ personId: sel.value, deviceToken: state.session.deviceToken });
+      return run(api('login', { personId: sel.value, pin: pin.value, deviceToken: knownToken(sel.value), deviceLabel: navigator.userAgent.slice(0, 80) })).then(function (r) {
+        var token = r.deviceToken || knownToken(sel.value);
+        saveDevice({ personId: sel.value, deviceToken: token });
+        saveSession({ personId: sel.value, deviceToken: token });
         if (r.ok) return start();
         msg.replaceChildren(h('div', { class: 'warn' }, 'This phone is waiting for the owner’s approval. After he approves it, sign in again.'),
           DEMO ? button('Demo only: approve this phone', 'small', function () { window.GJMock.approveDevices(); toast('Approved (demo). Sign in again.'); }) : null);
@@ -344,6 +359,12 @@
             h('div', { class: 'btns' }, button('Confirm back', 'good', function () { return run(api('confirmBack', { id: o.id, correctedTime: fix.value || undefined }), 'Confirmed.').then(VIEWS.approve); }))]));
         }
       });
+      (a.outNow || []).forEach(function (o) {
+        var at = h('input', { type: 'time' });
+        cards.push(h('div', { class: 'card' }, [h('div', { class: 'row' }, [h('strong', {}, o.name + ' is out'), h('span', { class: 'chip amber' }, 'Since ' + timeOf(o.approvedAt))]),
+          h('p', {}, o.reason + ' · about ' + o.expectedMinutes + ' min'), h('label', {}, 'If the person forgot to tap I’m back: time they returned'), at,
+          h('div', { class: 'btns' }, button('Close this outing', '', function () { return run(api('confirmBack', { id: o.id, correctedTime: at.value }), 'Closed.').then(VIEWS.approve); }))]));
+      });
       (a.dress || []).forEach(function (d) {
         cards.push(h('div', { class: 'card' }, [h('div', { class: 'row' }, [h('strong', {}, d.name + ' \u00b7 Dress check'), h('span', { class: 'chip amber' }, 'Possible issue')]),
           h('p', {}, niceDate(d.date) + ': ' + d.issues.join(', ') + (d.belt === 'issue' ? ' (hint: belt not seen)' : '')), h('p', { class: 'muted' }, 'The app only flags. Look at the photo and decide.'),
@@ -384,7 +405,7 @@
     }
     if (window.GJMenu) cards.push(window.GJMenu());
     cards.push(h('div', { class: 'card' }, [h('h2', {}, 'Account'), h('p', {}, state.me.name + ' · ' + state.me.group),
-      h('div', { class: 'btns' }, button('Sign out', 'danger', function () { state.me = null; viewLogin(); }))]));
+      h('div', { class: 'btns' }, button('Sign out', 'danger', function () { signOut(); viewLogin(); }))]));
     show(cards);
   };
 

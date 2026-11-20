@@ -82,8 +82,8 @@ function gjEnv_() {
       var lock = LockService.getScriptLock();
       gjTime_('lockWait', function () { lock.waitLock(25000); });
       gjLockDepth_ += 1;
-      // Writes are flushed while the lock is still held, also when the action ends with an error
-      // (for example a wrong PIN must still be counted).
+      // Writes are flushed while the lock is still held. A refused action has already thrown its
+      // writes away (GJApi.locked), except a wrong PIN, which must still be counted.
       try { return fn(); } finally { try { if (gjDb_) gjTime_('flush', function () { gjDb_.flush(); }); } finally { gjLockDepth_ -= 1; lock.releaseLock(); } }
     }
   };
@@ -160,9 +160,8 @@ function gjMailer_() {
 function gjJob_(name) {
   var ctx = gjCtx_();
   ctx.env.ownerEmail = Session.getEffectiveUser().getEmail();
-  var result = GJJobs.run(ctx, name, gjMailer_());
-  ctx.db.flush();
-  return result;
+  try { return GJJobs.run(ctx, name, gjMailer_()); }
+  finally { ctx.db.flush(); } // whatever the job managed to do is saved, also when it stopped half-way
 }
 function jobEmails() { return gjJob_('emails'); }
 function jobHourly() { return gjJob_('hourly'); }

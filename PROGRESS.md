@@ -65,7 +65,7 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 
 ### 20 Nov 2026, 16:45 run - phone app (first screens) + demo mode
 - `docs/` (served by GitHub Pages): `index.html`, `styles.css`, `app.js`, `config.js`, `manifest.json`, `icon.svg`. Screens: sign in, Today (check-in/out, going out, late/early), Apply (live result before Send, my requests, cancel), My month (leaves, 2-hour bank, violations, estimate), Approvals (leaves, going out, back confirm with time correction, unannounced absences, new phones), More (owner: create PIN shown once + WhatsApp link; sign out).
-- DEMO mode: while `config.js` has no API_URL the app runs the SAME server modules inside the phone on sample data (every PIN 1234, nothing saved). Lets the owner see the screens before the Apps Script deploy.
+- DEMO mode: while `config.js` has no API_URL the app runs the SAME server modules inside the phone on sample data (sample PINs, nothing saved). Lets the owner see the screens before the Apps Script deploy.
 - Checked in a 390x844 phone viewport with Playwright (`tools/ui-check.py`): sign in, phone approval, check-in, apply (auto-approved), my month, emergency request, Aakash approval. 0 console errors.
 - Found by that check and fixed: an uninformed very late arrival turned into a half/full day and lost its violation. Now the "not informed, more than 30 min" violation stays. Test added.
 - Folder is `docs/` (not `web/`) because GitHub Pages serves only the root or `/docs` from a branch.
@@ -74,10 +74,10 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 ### 20 Nov 2026, 17:00 - first real deploy (TEST)
 - Owner corrections: (1) late/early requests MUST be approved by Aakash (staff can send; Aakash approves) - NOT YET CODED, currently no approval; asked the owner what happens if Aakash has not decided before the person arrives (proposal: approved later = informed, rejected = not informed). (2) Left before the stated early time = those minutes not informed: confirmed. (3) More than 2 hours away = half day in quota only: confirmed; told him the uninformed-over-30 violation still applies on such a day.
 - Owner: if the Fable limit runs out, continue on Opus 5.5; wants safety wake-ups every 20-30 min. Told him I cannot switch the model myself. Safety wake-ups scheduled and re-armed by each run.
-- Test Sheet "GJ Leave - TEST" created (id 1ve6Piese3kmJ7VPx4q4MIjeyKvMXkEV9T9xfc9bO1yA). Bound Apps Script project created through the owner's Chrome, bundle loaded from GitHub raw, `setupOrUpgrade` run on the real Sheet (all tabs created), owner granted permissions himself.
+- Test Sheet "GJ Leave - TEST" created. Bound Apps Script project created through the owner's Chrome, bundle loaded from GitHub raw, `setupOrUpgrade` run on the real Sheet (all tabs created), owner granted permissions himself.
 - Web app deployed (version 1, execute as owner, access Anyone). URL is in `docs/config.js`.
 - Real-server check from the browser: names, owner bootstrap login, staff login pending, owner approves phone, preview, submit (auto-approved), stored as text in the Sheet. About 2.5 s per call. Test rows cleared afterwards.
-- Test roster seeded in People (every PIN 1234) and sample PayInfo (17,000 from the handoff example). TEST DATA ONLY.
+- Test roster seeded in People (test PINs, to be replaced) and sample PayInfo (17,000 from the handoff example). TEST DATA ONLY.
 - GitHub Pages enabled (main, /docs): https://varunsaini08581-pixel.github.io/gj-leave/  Demo mode: add ?demo=1
 - Redeploying after code changes: Apps Script > Deploy > Manage deployments > edit > New version (same URL). New Google permission is not needed unless a new service is added.
 
@@ -145,7 +145,7 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 ### 20 Nov 2026, 17:45 IST
 - Server version 7 is live on TEST (same URL). Measured with the timing info now returned by the server: Today 0.5 s on the server (0 Sheet reads), login 1.4 s, phone approval 0.8 s, check-in with photo 4.1 s (Drive 1.8 s, Sheet writes 1.4 s). On top of that Google's web-app layer adds about 2 s per call that the app cannot remove. So on a phone: screens about 2.3 s, simple actions about 3 s, check-in about 6 s (was 12-15 s).
 - Thumbnail read back through the API matched byte for byte; Today at GJ lists the check-ins.
-- Test rows made by these checks were cleared from the TEST Sheet and `setupOrUpgrade` was run to refresh the read cache; the owner's first sign-in will be the bootstrap phone again.
+- Test rows made by these checks were cleared from the TEST Sheet and `setupOrUpgrade` was run to refresh the read cache.
 
 ### 20 Nov 2026, 17:52 IST
 - `test/month-simulation.test.js`: October 2026 with 12 people (9 staff + new joiner Garvit + Aakash + Varun) driven through the real server functions: auto-approved leave, three emergencies, not-informed lates and passes, going out, special approval, restricted week, half day, absent with no request, recorded-only leave, early leaving, bank overflow, Anita's weekdays, Aakash's leave to Varun. Every person's leaves, days cut, bank minutes, minutes beyond the bank, violations and rupees match a hand count written in the test; shop totals 6 violations and Rs 1,764.
@@ -155,13 +155,16 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 ### 20 Nov 2026, 17:58 IST
 Staff guide (5 pages, Hinglish) and owner page (3 pages) written; built by tools/staff-guide.py and tools/owner-guide.py. Not yet sent to the owner as final: wording follows the rules as built today and must be rebuilt if a bug round changes a rule.
 
+### 20 Nov 2026, 18:09 IST
+BUG ROUNDS 1-3 (independent reviewers; every finding came with a failing test, now in test/round1-3.test.js; reports in reviews/). Round 1 rule correctness: 2 Critical, 4 High, 14 Medium, 2 Low. Round 2 privacy and security: 1 Critical, 2 High, 7 Medium, 4 Low (+8 design risks). Round 3 concurrency, dates, storage: 1 Critical, 4 High, 7 Medium, 2 Low. Total 4 Critical, 10 High. ALL 50 findings fixed; 180 tests pass. Main fixes: the request time can no longer come from the phone; every changing action now runs from start to end inside the server lock and first throws away whatever it read while waiting (two clashing approvals can no longer both pass, a cancelled leave cannot come back, no lost approval, no double check-in); a refused action saves nothing; half day in the middle of the shift; informed-short-then-very-late now gives the violation; restricted-period leave goes to Aakash; cancel withdraws violations; quota checked for both months and includes automatic half days; closed days re-counted; C1-E keeps Bhawna and Pooja in; inactive or renamed rule members; PIN lock grows 15 min to 24 h; owner can remove a phone; Aakash cannot lift Varun's restriction or move the shop point; sizes and dates checked on the server; formula text neutralised; one bad e-mail no longer blocks the rest; end-of-day never runs before duty end; Sign out now needs the PIN again. New: called-emergency time on Aakash's entry, forgotten check-out entry, close an outing nobody closed, Phones screen. Rule choices made while fixing are assumptions 16-29 (several TO CONFIRM). Schema version 2 (3 new columns): TEST needs setupOrUpgrade + new deployment version. Test PIN and Sheet id removed from this log.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
 3. Reason list on the form: Sick, Family function, Family emergency, Personal work, Travel, Exam, Other (+ free text always required).
 4. One request = consecutive dates only.
 5. PIN is 4 to 6 digits.
-6. Late / early requests need no approval (the handoff only says "applied in the app"). Aakash gets a notification.
+6. (Replaced by the owner's decision: late / early requests must be APPROVED by Aakash.)
 7. Going-out time is counted from Aakash's APPROVAL time to the staff member's "I'm back" tap.
 8. Leaving before the stated early time: the minutes before the stated time are "not informed" (mirror of the late rule).
 9. A day with more than 2 hours away becomes a half day (0.5 leave) automatically, more than 4 h 30 min a full day, counted in the quota. No emergency count is added. If the time was NOT informed and over 30 min, the normal "not informed, more than 30 min" violation still applies.
@@ -172,11 +175,27 @@ Staff guide (5 pages, Hinglish) and owner page (3 pages) written; built by tools
 13. A new joiner in the middle of a month: the roster Sundays of the whole month are counted in that month's 5 (not pro-rated), and the absent check does not look at days before the joining date because it only runs for "today". The handoff lists "a new joiner or a leaver" as an edge case but gives no rule.
 14. Going-out requests are not part of the 2-hour reminder to Aakash.
 15. Manual check-in by Aakash when a phone or camera fails (no photo, reason required, labelled).
+16. Half-day notice is measured to the person's DUTY START that day (the handoff's wording), also for an afternoon half day. So a half day from 14:00 asked at 08:00 the same morning is Unannounced. Was measured to the half-day start before round 1. TO CONFIRM with the owner.
+17. A half day may sit anywhere inside the duty hours (owner: "any 4 h 30 min"). In the middle of the shift it is an approved window: the person stays checked in, leaves and returns; minutes missed outside the window count as late / early. A half day must fit inside duty hours.
+18. Approved half day and the person does not come for the other half either: end of day records "Absent – unannounced" for that half (0.5 leave + 1 violation; Aakash can excuse it). TO CONFIRM.
+19. A request still not decided when the day is over and the person stayed away: the day is counted as leave on the month page ("not decided"), Aakash and Varun are alerted, no violation by itself. If it is then REJECTED, the day becomes "Absent – unannounced" (+1 violation). TO CONFIRM.
+20. Which emergency of the month a request is (1st, 2nd, 3rd) is settled when it is GRANTED, among granted ones only.
+21. A leave in an "allowed, +1 violation" restricted period is never auto-approved; it goes to Aakash (handoff 3.4 "no restriction").
+22. Cancelling a leave before it starts withdraws the violations it had earned. Cancelled after it started: they stay.
+23. Restrictions: Aakash can add one and change one he added. Changing or switching off any other one is an override: Varun only. The shop location: first time Aakash or Varun; after that only Varun can move it. (Handoff 3.6 and 3.11 do not fully agree here.) TO CONFIRM.
+24. "Called – emergency": when Aakash enters a leave for someone he can give the time of the phone call (within the last 24 hours); notice is counted from that time. Without it, notice is counted from when he types it.
+25. A rule member who is not an active person (left, or the name no longer matches) never counts as present. When someone leaves, the owner must edit the clash rule, otherwise that group can take no leave.
+26. Dress incident on a Sunday is refused (dress code is Mon-Sat).
+27. PIN guessing: 5 wrong PINs lock the account for 15 min, then 1 h, 4 h, 16 h, 24 h. The person's own approved phone has its own counter, so a stranger cannot lock them out of it. At most 3 phone requests can wait per person.
+28. A 2-day 3rd emergency cuts 2 days (each day of it), the owner's words were "1 day cut". TO CONFIRM.
+29. An edit of an approved leave is decided again from scratch and CAN be auto-approved again if every auto condition holds (handoff Part 6 says "back to pending"). TO CONFIRM.
 
 ## Next
 - Owner still to answer: late/early request still PENDING when the person arrives - is "approved later = informed, rejected = not informed" right? (built this way)
-- 12-person month simulation against a hand count (handoff Part 7).
 - About 10 bug rounds with independent review agents (rule correctness; privacy and security; concurrency and dates; phone UI; upgrade and deploy safety; full shop-day simulation; edge cases; re-review of fixes). Done only when 2 rounds in a row have 0 Critical and 0 High.
+- NOT BUILT YET (found by round 1, features not bugs): warnings remembered for 3 months and the "last 3 months" view; "possible clash" shown on the apply form for pending requests; a Settings screen for shop-closed days; joining / leaving dates per person; month lock by both Aakash and Varun (today one of them can lock).
+- Design risks noted by round 2, still open: PIN hashes in the Sheet are 4-6 digit PINs (anyone who can open the Sheet could work them out: keep the Sheet private to the owner); GPS and the dress result come from the phone and can be faked by a technical person; the app shares the github.io address with the owner's other Pages sites.
+- Before release: a NEW Sheet, NEW PINs and a NEW Devices tab. Nothing from the TEST deployment is reused. The owner signs in first, at once, so the bootstrap phone is his.
 - Dress check on REAL shop photos (needs the owner or staff to take a few check-in photos at the shop).
 - Staff guide (visual PDF, simple Hinglish), owner page (what to watch, what the system cannot catch).
 - Release, only after the owner's OK: real Sheet "GJ Leave", real people / duty times / salary structure from the owner, new PINs, bind phones, set shop location, \`installTriggers\`, point \`docs/config.js\` at the real deployment.

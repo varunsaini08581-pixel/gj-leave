@@ -31,12 +31,20 @@
   function expectedDay(ctx, person, date) {
     var start = hhmmToMin(person.dutyStart), end = hhmmToMin(person.dutyEnd);
     var lv = grantedLeaveOn(ctx, person.id, date);
-    if (lv && lv.kind === 'half') {
+    var win = null;
+    if (lv && lv.kind === 'half' && lv.halfStart) {
       var hs = hhmmToMin(lv.halfStart), he = hs + HALF_DAY_MINUTES;
       if (hs <= start) start = Math.min(he, end);
       else if (he >= end) end = hs;
+      else win = { from: hs, to: he }; // a half day in the middle of the shift: an approved window
     }
-    return { start: start, end: end, fullLeave: !!(lv && lv.kind === 'full') };
+    return { start: start, end: end, win: win, fullLeave: !!(lv && lv.kind === 'full') };
+  }
+  /** Duty minutes between a and b that are NOT inside the approved half-day window. */
+  function uncovered(a, b, win) {
+    if (b <= a) return 0;
+    var inside = win ? Math.max(0, Math.min(b, win.to) - Math.max(a, win.from)) : 0;
+    return (b - a) - inside;
   }
 
   function punchesToday(ctx, personId, date, kind) {
@@ -76,8 +84,9 @@
     return ctx.env.withLock(function () {
       var person = H.find(ctx, 'People', actor.id);
       var date = a.date || H.today(ctx);
+      if (!Cal.isDate(date)) H.fail('BLOCKED', 'Pick an exact date.');
       if (a.kind !== 'late' && a.kind !== 'early') H.fail('BLOCKED', 'Choose late or early.');
-      if (!/^\d{2}:\d{2}$/.test(a.time || '')) H.fail('BLOCKED', 'Enter the exact time.');
+      if (!Cal.isTime(a.time)) H.fail('BLOCKED', 'Enter the exact time.');
       if (date < H.today(ctx)) H.fail('BLOCKED', 'This date has passed.');
       var day = expectedDay(ctx, person, date), t = hhmmToMin(a.time);
       if (day.fullLeave) H.fail('BLOCKED', 'You are on leave that day.');
@@ -141,9 +150,13 @@
       var flag = [];
       var distance = '';
       var shop = setting(ctx, 'shopPoint');
-      if (shop && a.lat !== undefined && a.lat !== '') {
+      var num = function (v, max) { return typeof v === 'number' && isFinite(v) && Math.abs(v) <= max; };
+      var located = num(a.lat, 90) && num(a.lng, 180);
+      if (!located) { a.lat = ''; a.lng = ''; }               // anything that is not a real reading is "no location"
+      if (!(typeof a.accuracy === 'number' && isFinite(a.accuracy) && a.accuracy >= 0)) a.accuracy = '';
+      if (shop && located) {
         var pt = JSON.parse(shop);
-        distance = distanceM(pt.lat, pt.lng, +a.lat, +a.lng);
+        distance = distanceM(pt.lat, pt.lng, a.lat, a.lng);
         if (distance > SHOP_RADIUS_M) flag.push('outside-shop-area');
       } else if (shop) flag.push('no-location');
       if (day.fullLeave || Cal.isRosterOff(person, date)) flag.push('off-day');
@@ -159,7 +172,7 @@
       }
       ctx.db.insert('Punches', punch);
 
-      var late = nowMin(ctx) - day.start, counted = null;
+      var late = uncovered(day.start, nowMin(ctx), day.win), counted = null;
       if (!day.fullLeave && !Cal.isRosterOff(person, date) && late > Minutes.DEFAULTS.lateGraceMinutes) {
         var q = activeShort(ctx, actor.id, date, 'late');
         // "Informed" only if it was applied before duty start AND Aakash approved it.
@@ -186,15 +199,15 @@
       var punch = { id: ctx.env.randomId(), personId: actor.id, date: date, kind: 'out', at: ctx.now, photoId: '', lat: '', lng: '',
         accuracy: '', distance: '', deviceId: actor.deviceId || '', flag: '', note: '' };
       ctx.db.insert('Punches', punch);
-      var now = nowMin(ctx), early = day.end - now;
+      var now = nowMin(ctx), early = uncovered(now, day.end, day.win);
       if (!day.fullLeave && !Cal.isRosterOff(person, date) && early > 0) {
         var q = activeShort(ctx, actor.id, date, 'early');
         var stated = q ? hhmmToMin(q.time) : null;
         var ok = !!q && q.status === 'Approved', wait = q && q.status === 'Pending' ? q.id : '';
         if (q && now >= stated) addDayMinutes(ctx, actor.id, date, 'early', early, ok, undefined, punch.id, wait);
         else if (q) { // left before the stated time: the extra minutes are not informed
-          addDayMinutes(ctx, actor.id, date, 'early', day.end - stated, ok, undefined, punch.id, wait);
-          addDayMinutes(ctx, actor.id, date, 'early', stated - now, false, undefined, punch.id);
+          if (uncovered(stated, day.end, day.win) > 0) addDayMinutes(ctx, actor.id, date, 'early', uncovered(stated, day.end, day.win), ok, undefined, punch.id, wait);
+          if (uncovered(now, stated, day.win) > 0) addDayMinutes(ctx, actor.id, date, 'early', uncovered(now, stated, day.win), false, undefined, punch.id);
         } else addDayMinutes(ctx, actor.id, date, 'early', early, false, undefined, punch.id);
         syncViolations(ctx, actor.id, Cal.monthKey(date));
       }
@@ -220,12 +233,11 @@
       boss(actor);
       var p = H.find(ctx, 'Punches', punchId);
       if (!p || !p.dress || p.dressDecision || !dressIssues(p.dress).length) H.fail('NOT_FOUND', 'Nothing to decide.');
+      var result = { id: punchId, decision: 'dismissed' };
+      if (confirm) result = Object.assign({ decision: 'confirmed' }, recordIncident(ctx, actor, { personId: p.personId, item: 'dress', date: p.date, note: 'Dress check: ' + dressIssues(p.dress).join(', '), photoId: p.photoId }));
       ctx.db.update('Punches', punchId, { dressDecision: confirm ? 'confirmed' : 'dismissed' });
       H.audit(ctx, actor.id, confirm ? 'dress.confirm' : 'dress.dismiss', punchId);
-      if (!confirm) return { id: punchId, decision: 'dismissed' };
-      return ctx.env.withLock(function () {
-        return Object.assign({ decision: 'confirmed' }, recordIncident(ctx, actor, { personId: p.personId, item: 'dress', date: p.date, note: 'Dress check: ' + dressIssues(p.dress).join(', '), photoId: p.photoId }));
-      });
+      return result;
     });
   }
 
@@ -236,7 +248,7 @@
       var person = H.find(ctx, 'People', a.personId), date = H.today(ctx);
       if (!person || person.role !== 'staff') H.fail('NOT_FOUND', 'Choose a staff member.');
       if (!String(a.reason || '').trim()) H.fail('REASON', 'Write why the person could not check in.');
-      if (!/^\d{2}:\d{2}$/.test(a.time || '')) H.fail('BLOCKED', 'Enter the exact arrival time.');
+      if (!Cal.isTime(a.time)) H.fail('BLOCKED', 'Enter the exact arrival time.');
       if (punchesToday(ctx, a.personId, date, 'in').length) H.fail('BLOCKED', 'Already checked in today.');
       var at = Core.toMs(date, a.time);
       if (at > ctx.now) H.fail('BLOCKED', 'The time cannot be in the future.');
@@ -245,6 +257,27 @@
       ctx.db.update('Punches', r.id, { enteredBy: actor.id, note: 'Entered by ' + actor.name + ': ' + String(a.reason).trim(), flag: 'entered-by-manager' });
       H.audit(ctx, actor.id, 'punch.manual', r.id, { personId: a.personId, time: a.time, reason: a.reason });
       return { id: r.id, lateMinutes: r.lateMinutes };
+    });
+  }
+
+  /** A forgotten check-out: Aakash enters the time the person left, with a reason. Labelled "entered by". */
+  function manualCheckOut(ctx, actor, a) {
+    return ctx.env.withLock(function () {
+      boss(actor);
+      var person = H.find(ctx, 'People', a.personId), date = a.date || H.today(ctx);
+      if (!person) H.fail('NOT_FOUND', 'Choose a person.');
+      if (!Cal.isDate(date) || date > H.today(ctx)) H.fail('BLOCKED', 'Pick the date.');
+      if (!String(a.reason || '').trim()) H.fail('REASON', 'Write why the check-out is entered by hand.');
+      if (!Cal.isTime(a.time)) H.fail('BLOCKED', 'Enter the exact time the person left.');
+      var pin = punchesToday(ctx, a.personId, date, 'in')[0];
+      if (!pin) H.fail('BLOCKED', 'There is no check-in on that day.');
+      if (punchesToday(ctx, a.personId, date, 'out').length) H.fail('BLOCKED', 'Already checked out on that day.');
+      var at = Core.toMs(date, a.time);
+      if (at > ctx.now || at < pin.at) H.fail('BLOCKED', 'The time must be after the check-in and not in the future.');
+      var r = checkOut({ db: ctx.db, env: ctx.env, now: at }, { id: person.id, name: person.name, role: person.role, deviceId: '' });
+      ctx.db.update('Punches', r.id, { enteredBy: actor.id, note: 'Entered by ' + actor.name + ': ' + String(a.reason).trim(), flag: 'entered-by-manager' });
+      H.audit(ctx, actor.id, 'punch.manual-out', r.id, { personId: a.personId, date: date, time: a.time, reason: a.reason });
+      return { id: r.id, earlyMinutes: r.earlyMinutes };
     });
   }
 
@@ -310,10 +343,24 @@
     return ctx.env.withLock(function () {
       boss(actor);
       var o = H.find(ctx, 'Outings', id);
+      if (o && o.status === 'Approved') {
+        // The person never tapped "I'm back": Aakash closes the outing with the time they returned.
+        if (!Cal.isTime(correctedTime)) H.fail('BLOCKED', 'Enter the exact time the person came back.');
+        var back = Core.toMs(o.date, correctedTime);
+        if (back < o.approvedAt || back > ctx.now) H.fail('BLOCKED', 'That time is outside the outing.');
+        var mins = outingMinutes(o, back);
+        ctx.db.update('Outings', id, { status: 'Confirmed', backAt: back, correctedBackAt: back, minutes: mins, confirmedAt: ctx.now, confirmedBy: actor.id });
+        var made = addDayMinutes(ctx, o.personId, o.date, 'out', mins, true, undefined, id);
+        ctx.db.update('DayMinutes', made.id, { note: 'Closed by ' + actor.name });
+        syncViolations(ctx, o.personId, Cal.monthKey(o.date));
+        H.audit(ctx, actor.id, 'out.close', id, { back: back, minutes: mins });
+        H.notify(ctx, o.personId, 'out', 'Going out closed by ' + actor.name, mins + ' min counted (back at ' + correctedTime + ').', id);
+        return { id: id, status: 'Confirmed', minutes: mins };
+      }
       if (!o || o.status !== 'Back') H.fail('NOT_FOUND', 'Nothing to confirm.');
       var patch = { status: 'Confirmed', confirmedAt: ctx.now, confirmedBy: actor.id };
       if (correctedTime) {
-        if (!/^\d{2}:\d{2}$/.test(correctedTime)) H.fail('BLOCKED', 'Enter the exact time.');
+        if (!Cal.isTime(correctedTime)) H.fail('BLOCKED', 'Enter the exact time.');
         var corrected = Core.toMs(o.date, correctedTime);
         if (corrected < o.approvedAt || corrected > ctx.now) H.fail('BLOCKED', 'That time is outside the outing.');
         patch.correctedBackAt = corrected; patch.minutes = outingMinutes(o, corrected);
@@ -328,12 +375,16 @@
     });
   }
 
+  var REMIND_GAP_MS = 10 * 60000;
   function remindBack(ctx, actor, id) {
-    var o = H.find(ctx, 'Outings', id);
-    if (!o || o.personId !== actor.id || o.status !== 'Back') H.fail('NOT_FOUND', 'Nothing to remind.');
-    ctx.db.update('Outings', id, { remindedAt: ctx.now });
-    H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'out', 'Reminder: confirm ' + H.find(ctx, 'People', actor.id).name + ' is back', '', id); });
-    return { ok: true };
+    return ctx.env.withLock(function () {
+      var o = H.find(ctx, 'Outings', id);
+      if (!o || o.personId !== actor.id || o.status !== 'Back') H.fail('NOT_FOUND', 'Nothing to remind.');
+      if (o.remindedAt && ctx.now - o.remindedAt < REMIND_GAP_MS) H.fail('BLOCKED', 'A reminder was sent a few minutes ago.');
+      ctx.db.update('Outings', id, { remindedAt: ctx.now });
+      H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'out', 'Reminder: confirm ' + H.find(ctx, 'People', actor.id).name + ' is back', '', id); });
+      return { ok: true };
+    });
   }
 
   // ---------- Month calculation ----------
@@ -368,6 +419,8 @@
 
   /** Keep the Violations tab in step with the minute rules. Never deletes: a dropped one is marked removed. */
   function syncViolations(ctx, personId, monthKey) {
+    var who = H.find(ctx, 'People', personId);
+    if (who && who.noApproval) return; // records only (intern): never a violation
     var mm = monthMinutes(ctx, personId, monthKey);
     var wanted = {}, perEvent = {};
     mm.run.violations.forEach(function (v) {
@@ -379,7 +432,11 @@
     // 30 min" is still a violation on that day.
     var convertedDates = {}; mm.converted.forEach(function (c) { convertedDates[c.date] = true; });
     ctx.db.rows('DayMinutes').forEach(function (m) {
-      if (m.personId === personId && convertedDates[m.date] && !m.informed && m.minutes > Minutes.DEFAULTS.notInformedMaxMinutes) {
+      if (m.personId !== personId || !convertedDates[m.date]) return;
+      // The part nobody was told about: everything when not informed; when informed, the minutes after the stated time.
+      var stated = m.statedMinutes === '' || m.statedMinutes === undefined || m.statedMinutes === null ? null : m.statedMinutes;
+      var silent = !m.informed ? m.minutes : (stated === null ? 0 : Math.max(0, m.minutes - stated));
+      if (silent > Minutes.DEFAULTS.notInformedMaxMinutes) {
         wanted['dm:' + m.id + ':not-informed-over-30:1'] = { rule: 'not-informed-over-30', date: m.date };
       }
     });
@@ -405,13 +462,19 @@
   function myMonth(ctx, personId, monthKey) {
     var person = H.find(ctx, 'People', personId);
     var mm = monthMinutes(ctx, personId, monthKey);
-    var leaves = ctx.db.rows('LeaveRequests').filter(function (r) {
-      return r.personId === personId && (r.status === 'Approved' || r.status === 'Recorded' || r.status === 'Absent – unannounced');
-    });
+    var closed = H.closedSet(ctx), today = H.today(ctx), undecided = [];
     var days = [], emergencies = 0;
-    leaves.forEach(function (r) {
-      if (r.type === 'Emergency' && Cal.monthKey(r.dates[0]) === monthKey) emergencies += 1;
-      r.dates.forEach(function (d) { days.push({ date: d, amount: r.kind === 'half' ? 0.5 : 1, penaltyEmergency: !!r.penaltyEmergency }); });
+    ctx.db.rows('LeaveRequests').forEach(function (r) {
+      if (r.personId !== personId) return;
+      var counted = H.GRANTED[r.status] || r.status === H.ABSENT;
+      if (counted && r.type === 'Emergency' && Cal.monthKey(r.dates[0]) === monthKey) emergencies += 1;
+      r.dates.forEach(function (d) {
+        if (closed[d]) return; // the shop was closed: no leave is used
+        // A request nobody decided, for a day that has gone by with no check-in, is still a day away.
+        var gone = !counted && H.OPEN[r.status] && d <= today && !Cal.isRosterOff(person, d) && H.dayOver(ctx, person, d) && !H.hasCheckIn(ctx, personId, d);
+        if (gone && Cal.monthKey(d) === monthKey) undecided.push(d);
+        if (counted || gone) days.push({ date: d, amount: r.kind === 'half' ? 0.5 : 1, penaltyEmergency: !!r.penaltyEmergency && counted });
+      });
     });
     mm.converted.forEach(function (c) { days.push({ date: c.date, amount: c.amount }); });
     var salary = mm.pay ? mm.pay.fixedSalary : 0;
@@ -427,7 +490,7 @@
     return {
       month: monthKey, personId: personId, name: person.name, onPayroll: !person.noQuota,
       leaves: { total: quota.total, free: Leave.CFG.freeLeaves, left: quota.left, rosterSundays: quota.rosterSundays, taken: quota.leavesTaken,
-        emergencies: emergencies, emergenciesAllowed: Leave.CFG.maxEmergencies, daysCut: quota.daysCut, autoHalfDays: mm.converted },
+        emergencies: emergencies, emergenciesAllowed: Leave.CFG.maxEmergencies, daysCut: quota.daysCut, autoHalfDays: mm.converted, undecided: undecided },
       bank: { minutes: mm.run.bankMinutes, used: mm.run.bankUsed, left: mm.run.bankLeft, beyond: mm.run.beyondBankMinutes,
         passesUsed: mm.run.passesUsed, passes: Minutes.DEFAULTS.freePasses,
         days: mm.events.map(function (m, i) { var l = mm.run.lines[i]; return { date: m.date, kind: m.kind, minutes: m.minutes, counted: l.counted, fromBank: l.fromBank, informed: m.informed, notes: l.notes || [] }; }) },
@@ -490,21 +553,26 @@
       var made = [];
       ctx.db.rows('People').forEach(function (p) {
         if (p.active === false || p.role !== 'staff' || Cal.isRosterOff(p, date)) return;
+        if (!H.dayOver(ctx, p, date)) return; // never before that person's duty end (a job run by hand in the morning marks nobody)
         if (punchesToday(ctx, p.id, date, 'in').length) return;
-        var has = ctx.db.rows('LeaveRequests').some(function (r) { return r.personId === p.id && r.dates.indexOf(date) !== -1 && r.status !== 'Cancelled' && r.status.indexOf('Rejected') !== 0; });
-        if (has) return;
-        var row = { id: ctx.env.randomId(), personId: p.id, kind: 'full', dates: [date], halfStart: '', reasonCode: '', reasonText: '', submittedAt: ctx.now,
-          type: 'Unannounced', noticeHours: 0, run: 1, route: 'system', status: p.noApproval ? 'Recorded' : 'Absent – unannounced', approvals: {},
-          extremeEmergency: false, emergencyNo: 0, penaltyEmergency: false, restrictionViolation: false, enteredBy: 'system', decidedAt: ctx.now,
-          decidedBy: 'system', decisionReason: '', history: [{ at: ctx.now, by: 'system', action: 'absent-no-request' }] };
-        ctx.db.insert('LeaveRequests', row);
-        if (!p.noApproval) {
-          ctx.db.insert('Violations', { id: ctx.env.randomId(), personId: p.id, date: date, rule: 'absent-no-request', source: 'auto', proof: row.id, note: '',
-            createdBy: 'system', createdAt: ctx.now, disputeState: '', disputeAt: '', disputeText: '', disputeDecidedBy: '', disputeDecidedAt: '' });
-          H.notify(ctx, p.id, 'violation', 'Absent – unannounced', 'No request and no check-in on ' + niceDay(date) + '.', row.id);
+        var rows = ctx.db.rows('LeaveRequests').filter(function (r) { return r.personId === p.id && r.dates.indexOf(date) !== -1; });
+        var held = rows.filter(function (r) { return H.GRANTED[r.status] || r.status === H.ABSENT; });
+        if (held.some(function (r) { return r.kind === 'full'; })) return;
+        if (held.length) {
+          // An approved half day, and the person did not come for the other half either.
+          if (held.length < 2) { H.markAbsent(ctx, p, date, 'half', 'Approved half day, but no check-in for the other half'); made.push(p.name); }
+          return;
         }
-        H.byRole(ctx, 'owner').concat(H.byRole(ctx, 'manager')).forEach(function (m) { H.notify(ctx, m.id, 'absent', 'Absent – unannounced: ' + p.name, niceDay(date), row.id); });
-        H.audit(ctx, 'system', 'absent.auto', row.id);
+        var open = rows.filter(function (r) { return H.OPEN[r.status]; })[0];
+        if (open) {
+          // Asked, nobody decided, and the person stayed away: counted as a day away; the bosses must still decide.
+          var told = ctx.db.rows('Notifications').some(function (n) { return n.kind === 'undecided' && n.ref === open.id + ':' + date; });
+          if (!told) H.byRole(ctx, 'owner').concat(H.byRole(ctx, 'manager')).forEach(function (m) {
+            H.notify(ctx, m.id, 'undecided', 'Not decided: ' + p.name + ' was away today', 'The leave request for ' + niceDay(date) + ' is still waiting. Approve or reject it.', open.id + ':' + date);
+          });
+          return;
+        }
+        H.markAbsent(ctx, p, date, 'full');
         made.push(p.name);
       });
       return made;
@@ -517,7 +585,7 @@
       boss(actor);
       if (!String(reason || '').trim()) H.fail('REASON', 'A reason is required.');
       var r = H.find(ctx, 'LeaveRequests', leaveId);
-      if (!r || r.status !== 'Absent – unannounced') H.fail('NOT_FOUND', 'Not an unannounced absence.');
+      if (!r || r.status !== H.ABSENT) H.fail('NOT_FOUND', 'Not an unannounced absence.');
       ctx.db.update('LeaveRequests', leaveId, { status: 'Approved', decisionReason: 'Humanitarian – excused: ' + reason, decidedBy: actor.id, decidedAt: ctx.now,
         history: r.history.concat([{ at: ctx.now, by: actor.id, action: 'excused', reason: reason }]) });
       ctx.db.rows('Violations').forEach(function (v) {
@@ -529,7 +597,7 @@
   }
 
   var api = { requestShort: requestShort, decideShort: decideShort, checkIn: checkIn, checkOut: checkOut, goingOut: goingOut, decideOuting: decideOuting,
-    imBack: imBack, confirmBack: confirmBack, decideDress: decideDress, manualCheckIn: manualCheckIn, effectOf: effectOf, hints: hints, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
+    imBack: imBack, confirmBack: confirmBack, manualCheckOut: manualCheckOut, expectedDay: expectedDay, uncovered: uncovered, decideDress: decideDress, manualCheckIn: manualCheckIn, effectOf: effectOf, hints: hints, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
     syncViolations: syncViolations };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJAttendance = api;

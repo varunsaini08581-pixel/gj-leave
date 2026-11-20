@@ -51,6 +51,13 @@
     return { awayMembers: awayMembers, present: present };
   }
 
+  /** A rule member who is not an active person (left, or renamed) can never count as present. */
+  function withGone(rule, map, people) {
+    var out = {}; Object.keys(map).forEach(function (k) { out[k] = map[k]; });
+    rule.members.forEach(function (m) { if (!people[m] && !out[m]) out[m] = 'gone'; });
+    return out;
+  }
+
   /**
    * Check a new or edited request.
    * request: { person, dates: ['YYYY-MM-DD', ...], extremeEmergency?: boolean }
@@ -66,15 +73,25 @@
     request.dates.forEach(function (date) {
       if (Cal.isRosterOff(me || {}, date)) return; // already off by roster; the request adds nothing
       var map = awayOn(date, people, others);
+      // While a group runs on an extreme emergency (C1-E), the people it depends on must stay in.
+      rules.forEach(function (rule) {
+        if (!rule.on || !rule.emergencyIfAllPresent || rule.emergencyIfAllPresent.indexOf(request.person) === -1) return;
+        var m0 = withGone(rule, map, people);
+        if (!ruleBroken(rule, date, m0)) return;
+        result.blocks.push({ rule: rule.id + '-E', date: date, who: rule.members.filter(function (m) { return m0[m] === 'request'; }),
+          message: 'Not allowed: ' + rule.label + ' is running on an extreme emergency on ' + niceDate(date) + ' — ' + rule.emergencyIfAllPresent.join(' and ') + ' must both be present.' });
+        result.ok = false;
+      });
       map[request.person] = 'request';
       rules.forEach(function (rule) {
         if (!rule.on || rule.members.indexOf(request.person) === -1) return;
-        var broken = ruleBroken(rule, date, map);
+        var ruleMap = withGone(rule, map, people);
+        var broken = ruleBroken(rule, date, ruleMap);
         if (!broken) return;
 
         var canBeEmergency = !!rule.emergencyIfAllPresent &&
           broken.present === rule.minPresent - 1 && broken.present >= 1 &&
-          rule.emergencyIfAllPresent.every(function (m) { return !map[m]; });
+          rule.emergencyIfAllPresent.every(function (m) { return !map[m] && people[m]; });
         if (canBeEmergency && request.extremeEmergency) { result.needsAakash = true; return; }
         if (canBeEmergency) result.extremeEmergencyPossible = true;
 
@@ -83,7 +100,7 @@
         var message = 'Not allowed: ' + who.join(' and ') + (who.length > 1 ? ' are' : ' is') +
           ' off on ' + niceDate(date) + ' — ' + rule.label + ' needs ' + rule.minPresent +
           ' of ' + rule.members.join(', ') + ' present.';
-        result.blocks.push({ rule: rule.id, date: date, message: message });
+        result.blocks.push({ rule: rule.id, date: date, message: message, who: who.filter(function (m) { return ruleMap[m] === 'request'; }) });
         result.ok = false;
       });
     });

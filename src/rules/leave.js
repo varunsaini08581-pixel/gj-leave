@@ -135,6 +135,7 @@
     if (input.days > cfg.autoMaxDays && input.run < 3) reasons.push('More than 2 days.');
     if (input.type !== 'Regular') reasons.push(input.type + ' leave.');
     else if (input.noticeHours < cfg.autoNoticeHours) reasons.push('Notice is less than 48 hours.');
+    if (input.restrictionViolation) reasons.push('Restricted period.');
     if (input.quotaAfter > cfg.freeLeaves) reasons.push('Above the 5 free leaves this month.');
     if (input.violationsThisMonth > 0) reasons.push('A violation is recorded this month.');
     if (input.clash && input.clash.needsAakash) reasons.push('Extreme emergency: 2 of Sales away.');

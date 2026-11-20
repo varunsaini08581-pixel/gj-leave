@@ -70,16 +70,10 @@
     },
     decideShort: function (ctx, actor, a) { return Att.decideShort(ctx, actor, a.id, !!a.approve, a.reason); },
     checkIn: function (ctx, actor, a) {
-      // The check-in photo is taken inside the app (back camera, landscape) and is required.
-      if (!a.photo || !a.thumb) throw err('BLOCKED', 'Take the check-in photo first.');
-      if (String(a.photo).length > 900000 || String(a.thumb).length > 45000) throw err('BLOCKED', 'The photo is too large. Please try again.');
-      if (ctx.db.rows('Punches').some(function (x) { return x.personId === actor.id && x.date === Core._.today(ctx) && x.kind === 'in'; })) throw err('BLOCKED', 'You have already checked in today.');
-      var stamp = Core._.today(ctx) + '_' + actor.id + '_' + ctx.now;
-      // Full photo: private Drive folder. Thumbnail: a small cell in the Thumbs tab (no second Drive file).
-      var thumbId = 't_' + ctx.env.randomId();
-      var args = { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, photoId: ctx.env.savePhoto(stamp + '.jpg', a.photo), thumbId: thumbId };
-      var result = Att.checkIn(ctx, actor, args);
-      ctx.db.insert('Thumbs', { id: thumbId, personId: actor.id, date: Core._.today(ctx), data: a.thumb });
+      // a = what PREPARE.checkIn made of the phone's request. Inside the server lock, on fresh data:
+      // a second copy of the same check-in (a retry, a second tab) is refused here.
+      var result = Att.checkIn(ctx, actor, { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, photoId: a.photoId, thumbId: a.thumbId });
+      ctx.db.insert('Thumbs', { id: a.thumbId, personId: actor.id, date: Core._.today(ctx), data: a.thumb });
       return result;
     },
     photo: function (ctx, actor, a) {
@@ -96,6 +90,7 @@
     },
     decideDress: function (ctx, actor, a) { return Att.decideDress(ctx, actor, a.id, !!a.confirm, Admin.recordIncident); },
     manualCheckIn: function (ctx, actor, a) { return Att.manualCheckIn(ctx, actor, a); },
+    manualCheckOut: function (ctx, actor, a) { return Att.manualCheckOut(ctx, actor, a); },
     checkOut: function (ctx, actor) { return Att.checkOut(ctx, actor); },
     goingOut: function (ctx, actor, a) { return Att.goingOut(ctx, actor, a); },
     decideOuting: function (ctx, actor, a) { return Att.decideOuting(ctx, actor, a.id, !!a.approve, a.reason); },
@@ -128,6 +123,10 @@
         absences: ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Absent \u2013 unannounced'; }).map(function (r) { return { id: r.id, name: names[r.personId], dates: r.dates }; }),
         outings: ctx.db.rows('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Back'; }).map(function (o) {
           return { id: o.id, name: names[o.personId], status: o.status, reason: o.reason, expectedMinutes: o.expectedMinutes, requestedAt: o.requestedAt, approvedAt: o.approvedAt, backAt: o.backAt, minutes: o.minutes };
+        }),
+        // Out right now: if the person never taps "I'm back", Aakash closes it with the real time.
+        outNow: ctx.db.rows('Outings').filter(function (o) { return o.status === 'Approved'; }).map(function (o) {
+          return { id: o.id, name: names[o.personId], date: o.date, reason: o.reason, expectedMinutes: o.expectedMinutes, approvedAt: o.approvedAt };
         }),
         shorts: ctx.db.rows('ShortRequests').filter(function (q) { return q.status === 'Pending'; })
           .map(function (q) { return { id: q.id, name: names[q.personId], kind: q.kind, date: q.date, time: q.time, submittedAt: q.submittedAt }; }),
@@ -177,7 +176,7 @@
     devices: function (ctx, actor) {
       if (actor.role !== 'owner') throw err('FORBIDDEN', 'Only the owner.');
       var names = nameMap(ctx);
-      return ctx.db.rows('Devices').map(function (d) { return { id: d.id, name: names[d.personId], label: d.label, status: d.status, requestedAt: d.requestedAt }; });
+      return ctx.db.rows('Devices').map(function (d) { return { id: d.id, name: names[d.personId], label: d.label, status: d.status, requestedAt: d.requestedAt, decidedAt: d.decidedAt }; });
     },
     decideDevice: function (ctx, actor, a) { return Core.decideDevice(ctx, actor, a.id, !!a.approve); },
     notifications: function (ctx, actor) {
@@ -189,15 +188,72 @@
   function nameMap(ctx) { var m = {}; ctx.db.rows('People').forEach(function (p) { m[p.id] = p.name; }); return m; }
   function err(code, message) { var e = new Error(message); e.code = code; return e; }
 
+  // Actions that only read. Everything else changes data and runs, from start to end, inside the server lock.
+  var READ_ONLY = { me: 1, previewLeave: 1, myLeaves: 1, pending: 1, effect: 1, photo: 1, myMonth: 1, today: 1, approvals: 1, incidentItems: 1,
+    disputes: 1, getSettings: 1, restrictions: 1, board: 1, todayAtGJ: 1, calendar: 1, myRestrictions: 1, monthReport: 1, devices: 1, notifications: 1 };
+  var JPEG = /^data:image\/jpeg;base64,[A-Za-z0-9+\/]+=*$/;
+  var TEXT_MAX = 2000, LIST_MAX = 400;
+
+  /** Slow work that must not hold the lock: the photo upload. Runs after sign-in is checked, before the lock. */
+  var PREPARE = {
+    checkIn: function (ctx, actor, a) {
+      // The check-in photo is taken inside the app (back camera, landscape) and is required.
+      if (!a.photo || !a.thumb) throw err('BLOCKED', 'Take the check-in photo first.');
+      if (typeof a.photo !== 'string' || typeof a.thumb !== 'string' || a.photo.length > 900000 || a.thumb.length > 45000) throw err('BLOCKED', 'The photo is too large. Please try again.');
+      // Only a picture made by the app is stored: never a link that other phones would then load.
+      if (!JPEG.test(a.thumb) || !JPEG.test(a.photo)) throw err('BLOCKED', 'The photo could not be read. Please take it again.');
+      if (ctx.db.rows('Punches').some(function (x) { return x.personId === actor.id && x.date === Core._.today(ctx) && x.kind === 'in'; })) throw err('BLOCKED', 'You have already checked in today.');
+      var stamp = Core._.today(ctx) + '_' + actor.id + '_' + ctx.now;
+      // Full photo: private Drive folder. Thumbnail: a small cell in the Thumbs tab (no second Drive file).
+      return { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, thumb: a.thumb, photoId: ctx.env.savePhoto(stamp + '.jpg', a.photo), thumbId: 't_' + ctx.env.randomId() };
+    }
+  };
+
+  function own(map, key) { return typeof key === 'string' && Object.prototype.hasOwnProperty.call(map, key); }
+
+  /** Sizes are enforced here, not only in the phone: no text beyond 2,000 characters, no endless lists. */
+  function checkSizes(v, key, depth) {
+    if (typeof v === 'string') {
+      var max = key === 'photo' ? 900000 : key === 'thumb' ? 45000 : TEXT_MAX;
+      if (v.length > max) throw err('BLOCKED', 'That text is too long.');
+    } else if (v && typeof v === 'object') {
+      if (depth > 5) throw err('BLOCKED', 'The request is not valid.');
+      var keys = Object.keys(v);
+      if (keys.length > LIST_MAX) throw err('BLOCKED', 'That list is too long.');
+      keys.forEach(function (k) { checkSizes(v[k], k, depth + 1); });
+    }
+  }
+
+  /**
+   * Run a changing action inside the server lock. Whatever was read while waiting for the lock is
+   * thrown away first, so every decision is made on what the Sheet holds NOW. If the action is
+   * refused half-way, nothing of it is saved (except a counted wrong PIN).
+   */
+  function locked(ctx, fn) {
+    return ctx.env.withLock(function () {
+      if (ctx.db.reset) ctx.db.reset();
+      try { return fn(); }
+      catch (e) { if (!(e && e.keep) && ctx.db.discard) ctx.db.discard(); throw e; }
+    });
+  }
+
   function handle(ctx, request) {
     try {
       request = request || {};
-      var args = request.args || {};
+      var args = request.args && typeof request.args === 'object' && !Array.isArray(request.args) ? request.args : {};
+      var action = request.action;
       if (!(request.clientVersion >= MIN_CLIENT_VERSION)) return { ok: false, code: 'UPDATE', message: 'Please update the app.' };
-      if (PUBLIC[request.action]) return { ok: true, data: PUBLIC[request.action](ctx, args) };
-      if (!PRIVATE[request.action]) return { ok: false, code: 'UNKNOWN', message: 'Unknown action.' };
+      if (!own(PUBLIC, action) && !own(PRIVATE, action)) return { ok: false, code: 'UNKNOWN', message: 'Unknown action.' };
+      checkSizes(args, '', 0);
+      if (action === 'names') return { ok: true, data: PUBLIC.names(ctx, args) };
+      if (own(PUBLIC, action)) return { ok: true, data: locked(ctx, function () { return PUBLIC[action](ctx, args); }) };
       var actor = Core.authenticate(ctx, request.personId, request.deviceToken);
-      return { ok: true, data: PRIVATE[request.action](ctx, actor, args) };
+      if (own(READ_ONLY, action)) return { ok: true, data: PRIVATE[action](ctx, actor, args) };
+      if (own(PREPARE, action)) args = PREPARE[action](ctx, actor, args);
+      return { ok: true, data: locked(ctx, function () {
+        var fresh = Core.authenticate(ctx, request.personId, request.deviceToken); // the phone may have been removed meanwhile
+        return PRIVATE[action](ctx, fresh, args);
+      }) };
     } catch (e) {
       if (e && e.code) return { ok: false, code: e.code, message: e.message };
       return { ok: false, code: 'ERROR', message: 'Something went wrong. Please try again.' };

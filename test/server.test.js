@@ -152,7 +152,9 @@ test('restricted period: no-leave blocks; violation-type allows with 1 violation
   s.db.insert('Restrictions', { id: 'R2', from: '2026-11-16', to: '2026-11-20', note: 'Stock week', rule: 'violation', appliesTo: null, on: true });
   assert.equal(code(() => Core.submitLeave(c, s.actor('Neha'), leave(['2026-11-06']))), 'BLOCKED');
   const r = Core.submitLeave(c, s.actor('Neha'), leave(['2026-11-17', '2026-11-18']));
-  assert.equal(r.status, 'Approved');
+  assert.equal(r.status, 'Pending with Aakash'); // handoff 3.4: auto-approval needs "no restriction"
+  assert.equal(s.db.rows('Violations').length, 0); // nothing until it is granted
+  Core.decideLeave(c, s.actor('Aakash'), r.id, true);
   assert.equal(s.db.rows('Violations').filter(v => v.rule === 'leave-in-restricted-period').length, 1);
 });
 

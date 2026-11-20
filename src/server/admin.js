@@ -55,7 +55,15 @@
       if (!String(a.note || '').trim() && !a.photoId) H.fail('REASON', 'Add a photo or a note.');
       if (a.item === 'dress' && person.dressExempt) H.fail('BLOCKED', person.name + ' is exempt from the dress check.');
       var date = a.date || H.today(ctx);
+      if (!Cal.isDate(date)) H.fail('BLOCKED', 'Pick the date.');
       if (date > H.today(ctx)) H.fail('BLOCKED', 'The date cannot be in the future.');
+      if (a.item === 'dress' && Cal.weekday(date) === 0) H.fail('BLOCKED', 'The dress code is Monday to Saturday. Sunday is casual.');
+      // The same entry sent twice (a retry after a slow reply) is one incident, not two.
+      var twin = ctx.db.rows('Incidents').filter(function (i) {
+        return i.personId === a.personId && i.item === a.item && i.date === date && i.createdBy === actor.id && i.note === String(a.note || '').trim() &&
+          (i.photoId || '') === (a.photoId || '') && Math.abs(ctx.now - i.createdAt) < 30000;
+      })[0];
+      if (twin) return { id: twin.id, result: twin.result, count: twin.countInPeriod, grace: twin.grace, repeated: true };
       var pk = periodKey(date, row.per);
       var count = 1 + ctx.db.rows('Incidents').filter(function (i) { return i.personId === a.personId && i.item === a.item && periodKey(i.date, row.per) === pk && i.result !== 'cancelled'; }).length;
       var isViolation = count > row.grace && !person.noApproval; // Muskan: recorded only, never a violation
@@ -119,7 +127,7 @@
       var ev = H.evaluate(ctx, person, input, id);
       if (ev.decision === 'blocked') H.fail('BLOCKED', ev.reasons.join(' '));
       // Violations that came from the old version are withdrawn; the new version earns its own.
-      ctx.db.rows('Violations').forEach(function (v) { if (v.proof === id && v.disputeState !== 'removed') ctx.db.update('Violations', v.id, { disputeState: 'removed', note: 'Request edited' }); });
+      H.withdrawViolations(ctx, id, 'Request edited');
       var patch = { kind: input.kind, dates: ev.dates, halfStart: input.halfStart || '', reasonCode: input.reasonCode, reasonText: String(input.reasonText).trim(),
         submittedAt: ctx.now, type: ev.type, noticeHours: ev.noticeHours, run: ev.run, route: ev.decision, status: H.STATUS_FOR[ev.decision],
         approvals: ev.decision === 'special' ? { aakash: '', varun: '' } : {}, extremeEmergency: !!input.extremeEmergency, emergencyNo: ev.emergencyNo,
@@ -146,7 +154,8 @@
       var person = H.find(ctx, 'People', input.forPersonId);
       if (!person) H.fail('NOT_FOUND', 'No such person.');
       var dates = (input.dates || []).slice().sort();
-      if (!dates.length || !/^(full|half)$/.test(input.kind)) H.fail('BLOCKED', 'Pick exact dates.');
+      if (!dates.length || !/^(full|half)$/.test(input.kind) || !dates.every(Cal.isDate)) H.fail('BLOCKED', 'Pick exact dates.');
+      if (input.kind === 'half' && (dates.length !== 1 || !Cal.isTime(input.halfStart))) H.fail('BLOCKED', 'A half day is one date with a start time.');
       var clashOverlap = H.liveLeaves(ctx, person.id).some(function (r) { return r.dates.some(function (d) { return dates.indexOf(d) !== -1; }); });
       if (clashOverlap) H.fail('BLOCKED', 'This person already has a request on one of these dates.');
       var row = { id: ctx.env.randomId(), personId: person.id, kind: input.kind, dates: dates, halfStart: input.halfStart || '', reasonCode: input.reasonCode || 'Other',
@@ -172,6 +181,17 @@
     var s = p.sundayOff;
     if (!(s === 'every' || (Array.isArray(s) && s.every(function (n) { return n >= 1 && n <= 5; })))) H.fail('BLOCKED', 'Sunday roster is not valid.');
   }
+  /** Rules and restrictions hold names. When a name is corrected, they follow, so no rule silently loses a member. */
+  function renameEverywhere(ctx, actor, from, to) {
+    var swap = function (list) { return Array.isArray(list) ? list.map(function (n) { return n === from ? to : n; }) : list; };
+    var has = function (list) { return Array.isArray(list) && list.indexOf(from) !== -1; };
+    if (!ctx.db.rows('Rules').length) H.rules(ctx).forEach(function (r) { ctx.db.insert('Rules', r); });
+    ctx.db.rows('Rules').forEach(function (r) {
+      if (has(r.members) || has(r.emergencyIfAllPresent)) ctx.db.update('Rules', r.id, { members: swap(r.members), emergencyIfAllPresent: swap(r.emergencyIfAllPresent) });
+    });
+    ctx.db.rows('Restrictions').forEach(function (r) { if (has(r.appliesTo)) ctx.db.update('Restrictions', r.id, { appliesTo: swap(r.appliesTo) }); });
+    H.audit(ctx, actor.id, 'people.rename', from, { to: to });
+  }
   function savePerson(ctx, actor, p) {
     return ctx.env.withLock(function () {
       owner(actor);
@@ -182,7 +202,9 @@
       var sameName = ctx.db.rows('People').some(function (x) { return x.name === clean.name && x.id !== p.id && x.active !== false; });
       if (sameName) H.fail('BLOCKED', 'Another active person already has this name.');
       if (existing) {
-        if (existing.role === 'owner' && clean.role !== 'owner' && ctx.db.rows('People').filter(function (x) { return x.role === 'owner' && x.active !== false; }).length < 2) H.fail('BLOCKED', 'There must always be one owner.');
+        var losesOwner = existing.role === 'owner' && existing.active !== false && (clean.role !== 'owner' || clean.active === false);
+        if (losesOwner && ctx.db.rows('People').filter(function (x) { return x.role === 'owner' && x.active !== false; }).length < 2) H.fail('BLOCKED', 'There must always be one active owner.');
+        if (existing.name !== clean.name) renameEverywhere(ctx, actor, existing.name, clean.name);
         var before = {}; PERSON_FIELDS.forEach(function (f) { before[f] = existing[f]; });
         ctx.db.update('People', p.id, clean);
         H.audit(ctx, actor.id, 'people.update', p.id, { before: before, after: clean });
@@ -230,11 +252,18 @@
   function saveRestriction(ctx, actor, r) {
     return ctx.env.withLock(function () {
       boss(actor);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(r.from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(r.to || '') || r.to < r.from) H.fail('BLOCKED', 'Pick a valid date range.');
+      if (!Cal.isDate(r.from) || !Cal.isDate(r.to) || r.to < r.from) H.fail('BLOCKED', 'Pick a valid date range.');
+      var old = r.id && H.find(ctx, 'Restrictions', r.id);
+      if (r.id && !old) H.fail('NOT_FOUND', 'No such restriction.');
+      // Aakash can add a restriction, and change one he added himself. Changing or switching off
+      // any other one lifts a hard rule, and only Varun can do that.
+      if (old && actor.role !== 'owner' && old.createdBy !== actor.id) H.fail('FORBIDDEN', 'Only Varun can change or switch off this restriction.');
+      var known = ctx.db.rows('People').map(function (p) { return p.name; });
+      if (Array.isArray(r.appliesTo) && !r.appliesTo.every(function (n) { return known.indexOf(n) !== -1; })) H.fail('BLOCKED', 'Choose people from the list.');
       need(r.note, 'Write a note, for example "Peak sales season".');
       if (r.rule !== 'no-leave' && r.rule !== 'violation') H.fail('BLOCKED', 'Choose the rule.');
       var clean = { from: r.from, to: r.to, note: String(r.note).trim(), rule: r.rule, appliesTo: Array.isArray(r.appliesTo) && r.appliesTo.length ? r.appliesTo : null, on: r.on !== false };
-      if (r.id && H.find(ctx, 'Restrictions', r.id)) { ctx.db.update('Restrictions', r.id, clean); H.audit(ctx, actor.id, 'restrictions.update', r.id, clean); return { id: r.id }; }
+      if (old) { ctx.db.update('Restrictions', r.id, clean); H.audit(ctx, actor.id, 'restrictions.update', r.id, clean); return { id: r.id }; }
       var id = 'R' + ctx.env.randomId().slice(0, 6);
       ctx.db.insert('Restrictions', Object.assign({ id: id, createdBy: actor.id, createdAt: ctx.now }, clean));
       H.audit(ctx, actor.id, 'restrictions.create', id, clean);
@@ -245,7 +274,9 @@
   function setSetting(ctx, actor, key, value) {
     return ctx.env.withLock(function () {
       owner(actor);
-      if (!SETTING_KEYS[key]) H.fail('BLOCKED', 'Unknown setting.');
+      if (!Object.prototype.hasOwnProperty.call(SETTING_KEYS, key)) H.fail('BLOCKED', 'Unknown setting.');
+      if (key === 'closedDays' && !(Array.isArray(value) && value.length <= 400 && value.every(Cal.isDate))) H.fail('BLOCKED', 'Closed days must be a list of dates.');
+      if (key === 'reminderHours' && !(Number(value) >= 1 && Number(value) <= 48)) H.fail('BLOCKED', 'Reminder hours must be between 1 and 48.');
       putSetting(ctx, actor, key, value);
       return { ok: true };
     });
@@ -255,7 +286,9 @@
   function setShopPoint(ctx, actor, samples) {
     return ctx.env.withLock(function () {
       boss(actor);
-      var good = (samples || []).filter(function (s) { return isFinite(s.lat) && isFinite(s.lng) && Math.abs(s.lat) <= 90 && Math.abs(s.lng) <= 180; });
+      // The first time, Aakash or Varun sets it standing in the shop. Once set, only Varun can move it.
+      if (setting(ctx, 'shopPoint') && actor.role !== 'owner') H.fail('FORBIDDEN', 'The shop location is already set. Only Varun can change it.');
+      var good = (Array.isArray(samples) ? samples.slice(0, 60) : []).filter(function (s) { return s && typeof s.lat === 'number' && typeof s.lng === 'number' && isFinite(s.lat) && isFinite(s.lng) && Math.abs(s.lat) <= 90 && Math.abs(s.lng) <= 180; });
       if (good.length < 3) H.fail('BLOCKED', 'Not enough location readings. Stand inside the shop and try again.');
       var lat = good.reduce(function (t, s) { return t + +s.lat; }, 0) / good.length, lng = good.reduce(function (t, s) { return t + +s.lng; }, 0) / good.length;
       putSetting(ctx, actor, 'shopPoint', { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6, samples: good.length });

@@ -22,11 +22,15 @@
     if (v === undefined || v === null) return '';
     if (has(Schema.JSON_COLS[tab] || [], col)) return JSON.stringify(v);
     if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-    return String(v);
+    var s = String(v);
+    // Text that a spreadsheet could read as a formula is stored with a leading apostrophe
+    // (the cells are plain text as well; this is the second lock on the same door).
+    return /^[=+\-@']/.test(s) ? "'" + s : s;
   }
   function decode(tab, col, text) {
     if (text === '' || text === undefined || text === null) return has(Schema.JSON_COLS[tab] || [], col) ? null : '';
     text = String(text);
+    if (/^'[=+\-@']/.test(text)) text = text.slice(1);
     if (has(Schema.JSON_COLS[tab] || [], col)) { try { return JSON.parse(text); } catch (e) { return null; } }
     if (has(Schema.BOOL_COLS, col)) return text.toUpperCase() === 'TRUE';
     if (has(Schema.NUM_COLS, col)) { var n = Number(text); return isNaN(n) ? '' : n; }
@@ -45,6 +49,8 @@
       var data = grid.read(tab);
       if (!data.length) { grid.append(tab, Schema.TABS[tab].slice()); done.push('headers ' + tab); return; }
       var headers = data[0].map(String);
+      if (!has(headers, Schema.TABS[tab][0]) && headers.some(function (h) { return h !== ''; }))
+        throw new Error('The "' + tab + '" tab has lost its "' + Schema.TABS[tab][0] + '" column. Restore the header row before using the app.');
       var missing = Schema.TABS[tab].filter(function (c) { return !has(headers, c); });
       if (missing.length) { grid.writeRow(tab, 0, headers.concat(missing)); done.push('columns ' + tab + ': ' + missing.join(', ')); }
     });
@@ -105,7 +111,20 @@
       return t;
     }
     function toArray(tab, headers, obj) { return headers.map(function (h) { return encode(tab, h, obj[h]); }); }
+    var CELL_MAX = 49000; // a Sheet cell holds 50,000 characters
     function flush() {
+      // Nothing is written unless everything can be written: one oversized cell must not leave half an action on the Sheet.
+      Object.keys(cache).forEach(function (tab) {
+        var t = cache[tab];
+        t.pending.concat(t.dirty).forEach(function (r) {
+          toArray(tab, t.headers, r).forEach(function (cell) { if (cell.length > CELL_MAX) { discard(); throw new Error('A value is too long to store.'); } });
+        });
+      });
+      try { write(); } catch (e) { try { if (grid.commit) grid.commit({}); } catch (e2) { /* the cache expires by itself */ } discard(); throw e; } // a failed write is never repeated by a second flush
+    }
+    /** Forget everything read and everything not yet written (after a refused action, and when the server lock is taken). */
+    function discard() { cache = {}; if (grid.reset) grid.reset(); }
+    function write() {
       var full = {}, firstRows = {}, batch = [];
       // All appended rows of this request go to the Sheet in ONE step (reads first, then writes),
       // because on the real Sheet every read placed between two writes costs a round trip.
@@ -154,7 +173,7 @@
       },
       update: function (tab, key, patch) {
         var t = load(tab);
-        var keyCol = t.headers[0];
+        var keyCol = has(t.headers, Schema.TABS[tab][0]) ? Schema.TABS[tab][0] : t.headers[0]; // by name, wherever the column stands
         var row = t.rows.filter(function (r) { return String(r[keyCol]) === String(key); })[0];
         if (!row) throw new Error('update: no row in ' + tab + ' for ' + key);
         Object.keys(patch).forEach(function (k) {
@@ -172,7 +191,10 @@
         var out = data.map(function (r) { var o = {}; headers.forEach(function (h, c) { o[h] = decode(tab, h, r[c]); }); return o; });
         return out.concat(t.pending).slice(-n);
       },
-      flush: flush
+      flush: flush,
+      /** Called as the first thing inside the server lock: whatever was read while waiting is stale. */
+      reset: function () { flush(); discard(); },
+      discard: discard
     };
     return db;
   }

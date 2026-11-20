@@ -39,13 +39,22 @@
     return out;
   }
 
+  /** A real calendar date in YYYY-MM-DD form ('2026-11-31' and free text are refused). */
+  function isDate(d) {
+    if (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+    var p = parts(d);
+    if (p.y < 2020 || p.y > 2100 || p.m < 1 || p.m > 12 || p.d < 1) return false;
+    return fmt(Date.UTC(p.y, p.m - 1, p.d)) === d;
+  }
+  function isTime(t) { return typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t); }
+
   function dateRange(from, to) {
     var out = [];
     for (var d = from; d <= to; d = addDays(d, 1)) out.push(d);
     return out;
   }
 
-  var api = { addDays: addDays, weekday: weekday, monthKey: monthKey, daysInMonth: daysInMonth,
+  var api = { isDate: isDate, isTime: isTime, addDays: addDays, weekday: weekday, monthKey: monthKey, daysInMonth: daysInMonth,
     nthSunday: nthSunday, isRosterOff: isRosterOff, rosterSundaysInMonth: rosterSundaysInMonth, dateRange: dateRange };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJCalendar = api;
@@ -105,6 +114,13 @@
     return { awayMembers: awayMembers, present: present };
   }
 
+  /** A rule member who is not an active person (left, or renamed) can never count as present. */
+  function withGone(rule, map, people) {
+    var out = {}; Object.keys(map).forEach(function (k) { out[k] = map[k]; });
+    rule.members.forEach(function (m) { if (!people[m] && !out[m]) out[m] = 'gone'; });
+    return out;
+  }
+
   /**
    * Check a new or edited request.
    * request: { person, dates: ['YYYY-MM-DD', ...], extremeEmergency?: boolean }
@@ -120,15 +136,25 @@
     request.dates.forEach(function (date) {
       if (Cal.isRosterOff(me || {}, date)) return; // already off by roster; the request adds nothing
       var map = awayOn(date, people, others);
+      // While a group runs on an extreme emergency (C1-E), the people it depends on must stay in.
+      rules.forEach(function (rule) {
+        if (!rule.on || !rule.emergencyIfAllPresent || rule.emergencyIfAllPresent.indexOf(request.person) === -1) return;
+        var m0 = withGone(rule, map, people);
+        if (!ruleBroken(rule, date, m0)) return;
+        result.blocks.push({ rule: rule.id + '-E', date: date, who: rule.members.filter(function (m) { return m0[m] === 'request'; }),
+          message: 'Not allowed: ' + rule.label + ' is running on an extreme emergency on ' + niceDate(date) + ' — ' + rule.emergencyIfAllPresent.join(' and ') + ' must both be present.' });
+        result.ok = false;
+      });
       map[request.person] = 'request';
       rules.forEach(function (rule) {
         if (!rule.on || rule.members.indexOf(request.person) === -1) return;
-        var broken = ruleBroken(rule, date, map);
+        var ruleMap = withGone(rule, map, people);
+        var broken = ruleBroken(rule, date, ruleMap);
         if (!broken) return;
 
         var canBeEmergency = !!rule.emergencyIfAllPresent &&
           broken.present === rule.minPresent - 1 && broken.present >= 1 &&
-          rule.emergencyIfAllPresent.every(function (m) { return !map[m]; });
+          rule.emergencyIfAllPresent.every(function (m) { return !map[m] && people[m]; });
         if (canBeEmergency && request.extremeEmergency) { result.needsAakash = true; return; }
         if (canBeEmergency) result.extremeEmergencyPossible = true;
 
@@ -137,7 +163,7 @@
         var message = 'Not allowed: ' + who.join(' and ') + (who.length > 1 ? ' are' : ' is') +
           ' off on ' + niceDate(date) + ' — ' + rule.label + ' needs ' + rule.minPresent +
           ' of ' + rule.members.join(', ') + ' present.';
-        result.blocks.push({ rule: rule.id, date: date, message: message });
+        result.blocks.push({ rule: rule.id, date: date, message: message, who: who.filter(function (m) { return ruleMap[m] === 'request'; }) });
         result.ok = false;
       });
     });
@@ -287,6 +313,7 @@
     if (input.days > cfg.autoMaxDays && input.run < 3) reasons.push('More than 2 days.');
     if (input.type !== 'Regular') reasons.push(input.type + ' leave.');
     else if (input.noticeHours < cfg.autoNoticeHours) reasons.push('Notice is less than 48 hours.');
+    if (input.restrictionViolation) reasons.push('Restricted period.');
     if (input.quotaAfter > cfg.freeLeaves) reasons.push('Above the 5 free leaves this month.');
     if (input.violationsThisMonth > 0) reasons.push('A violation is recorded this month.');
     if (input.clash && input.clash.needsAakash) reasons.push('Extreme emergency: 2 of Sales away.');
@@ -490,8 +517,8 @@
 
   var TABS = {
     People: ['id', 'name', 'group', 'role', 'dutyStart', 'dutyEnd', 'sundayOff', 'noApproval', 'noClash', 'noQuota',
-      'dressExempt', 'active', 'email', 'phone', 'pinSalt', 'pinHash', 'pinTries', 'pinLockedUntil'],
-    Devices: ['id', 'personId', 'tokenHash', 'label', 'status', 'requestedAt', 'decidedAt', 'decidedBy'],
+      'dressExempt', 'active', 'email', 'phone', 'pinSalt', 'pinHash', 'pinTries', 'pinLockedUntil', 'pinLockLevel'],
+    Devices: ['id', 'personId', 'tokenHash', 'label', 'status', 'requestedAt', 'decidedAt', 'decidedBy', 'pinTries', 'pinLockedUntil'],
     PayInfo: ['personId', 'fixedSalary', 'targetAllowance', 'disciplineBonus', 'dutyHours', 'updatedAt', 'updatedBy'],
     Rules: ['id', 'on', 'label', 'members', 'minPresent', 'rosterSundayException', 'emergencyIfAllPresent'],
     Restrictions: ['id', 'from', 'to', 'note', 'rule', 'appliesTo', 'on', 'createdBy', 'createdAt'],
@@ -520,14 +547,14 @@
 
   // Every cell is stored as plain text (so Sheets never turns '2026-11-25' or '09:30' into a date).
   // These lists tell the store how to turn text back into numbers and booleans.
-  var NUM_COLS = ['pinTries', 'pinLockedUntil', 'requestedAt', 'decidedAt', 'submittedAt', 'noticeHours', 'run', 'emergencyNo',
+  var NUM_COLS = ['pinTries', 'pinLockedUntil', 'pinLockLevel', 'requestedAt', 'decidedAt', 'submittedAt', 'noticeHours', 'run', 'emergencyNo',
     'at', 'lat', 'lng', 'accuracy', 'distance', 'minutes', 'statedMinutes', 'createdAt', 'disputeAt', 'disputeDecidedAt',
     'lockedAt', 'readAt', 'emailedAt', 'updatedAt', 'minPresent', 'fixedSalary', 'targetAllowance', 'disciplineBonus', 'dutyHours',
     'expectedMinutes', 'countInPeriod', 'grace', 'approvedAt', 'backAt', 'confirmedAt', 'correctedBackAt', 'remindedAt'];
   var BOOL_COLS = ['noApproval', 'noClash', 'noQuota', 'dressExempt', 'active', 'on', 'extremeEmergency', 'penaltyEmergency',
     'restrictionViolation', 'informed'];
 
-  var SCHEMA_VERSION = 1;
+  var SCHEMA_VERSION = 2;
 
   var api = { TABS: TABS, JSON_COLS: JSON_COLS, NUM_COLS: NUM_COLS, BOOL_COLS: BOOL_COLS, SCHEMA_VERSION: SCHEMA_VERSION };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -583,6 +610,8 @@
       return data;
     }
     return {
+      /** Forget the versions seen so far: the next read asks the cache which copy is current. */
+      reset: function () { versions = null; readAt = {}; },
       tabNames: function () { return grid.tabNames(); },
       addTab: function (name) { dirty[name] = true; return grid.addTab(name); },
       read: read,
@@ -658,11 +687,15 @@
     if (v === undefined || v === null) return '';
     if (has(Schema.JSON_COLS[tab] || [], col)) return JSON.stringify(v);
     if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-    return String(v);
+    var s = String(v);
+    // Text that a spreadsheet could read as a formula is stored with a leading apostrophe
+    // (the cells are plain text as well; this is the second lock on the same door).
+    return /^[=+\-@']/.test(s) ? "'" + s : s;
   }
   function decode(tab, col, text) {
     if (text === '' || text === undefined || text === null) return has(Schema.JSON_COLS[tab] || [], col) ? null : '';
     text = String(text);
+    if (/^'[=+\-@']/.test(text)) text = text.slice(1);
     if (has(Schema.JSON_COLS[tab] || [], col)) { try { return JSON.parse(text); } catch (e) { return null; } }
     if (has(Schema.BOOL_COLS, col)) return text.toUpperCase() === 'TRUE';
     if (has(Schema.NUM_COLS, col)) { var n = Number(text); return isNaN(n) ? '' : n; }
@@ -681,6 +714,8 @@
       var data = grid.read(tab);
       if (!data.length) { grid.append(tab, Schema.TABS[tab].slice()); done.push('headers ' + tab); return; }
       var headers = data[0].map(String);
+      if (!has(headers, Schema.TABS[tab][0]) && headers.some(function (h) { return h !== ''; }))
+        throw new Error('The "' + tab + '" tab has lost its "' + Schema.TABS[tab][0] + '" column. Restore the header row before using the app.');
       var missing = Schema.TABS[tab].filter(function (c) { return !has(headers, c); });
       if (missing.length) { grid.writeRow(tab, 0, headers.concat(missing)); done.push('columns ' + tab + ': ' + missing.join(', ')); }
     });
@@ -741,7 +776,20 @@
       return t;
     }
     function toArray(tab, headers, obj) { return headers.map(function (h) { return encode(tab, h, obj[h]); }); }
+    var CELL_MAX = 49000; // a Sheet cell holds 50,000 characters
     function flush() {
+      // Nothing is written unless everything can be written: one oversized cell must not leave half an action on the Sheet.
+      Object.keys(cache).forEach(function (tab) {
+        var t = cache[tab];
+        t.pending.concat(t.dirty).forEach(function (r) {
+          toArray(tab, t.headers, r).forEach(function (cell) { if (cell.length > CELL_MAX) { discard(); throw new Error('A value is too long to store.'); } });
+        });
+      });
+      try { write(); } catch (e) { try { if (grid.commit) grid.commit({}); } catch (e2) { /* the cache expires by itself */ } discard(); throw e; } // a failed write is never repeated by a second flush
+    }
+    /** Forget everything read and everything not yet written (after a refused action, and when the server lock is taken). */
+    function discard() { cache = {}; if (grid.reset) grid.reset(); }
+    function write() {
       var full = {}, firstRows = {}, batch = [];
       // All appended rows of this request go to the Sheet in ONE step (reads first, then writes),
       // because on the real Sheet every read placed between two writes costs a round trip.
@@ -790,7 +838,7 @@
       },
       update: function (tab, key, patch) {
         var t = load(tab);
-        var keyCol = t.headers[0];
+        var keyCol = has(t.headers, Schema.TABS[tab][0]) ? Schema.TABS[tab][0] : t.headers[0]; // by name, wherever the column stands
         var row = t.rows.filter(function (r) { return String(r[keyCol]) === String(key); })[0];
         if (!row) throw new Error('update: no row in ' + tab + ' for ' + key);
         Object.keys(patch).forEach(function (k) {
@@ -808,7 +856,10 @@
         var out = data.map(function (r) { var o = {}; headers.forEach(function (h, c) { o[h] = decode(tab, h, r[c]); }); return o; });
         return out.concat(t.pending).slice(-n);
       },
-      flush: flush
+      flush: flush,
+      /** Called as the first thing inside the server lock: whatever was read while waiting is stale. */
+      reset: function () { flush(); discard(); },
+      discard: discard
     };
     return db;
   }
@@ -834,18 +885,41 @@
   var Cal = req ? req('../rules/calendar.js') : root.GJCalendar;
   var Clash = req ? req('../rules/clash.js') : root.GJClash;
   var Leave = req ? req('../rules/leave.js') : root.GJLeave;
+  var Minutes = req ? req('../rules/minutes.js') : root.GJMinutes;
 
   var IST_OFFSET_MS = 5.5 * 3600000;
   var PIN_MAX_TRIES = 5;
-  var PIN_LOCK_MS = 15 * 60000;
+  var PIN_LOCK_MS = 15 * 60000;       // first lock; each further lock in a row is 4 times longer, up to a day
+  var PIN_LOCK_MAX_MS = 24 * 3600000;
+  var MAX_PENDING_PHONES = 3;
+  var HALF_DAY_MINUTES = 270;         // owner: a half day is any 4 h 30 min
   var REASONS = ['Sick', 'Family function', 'Family emergency', 'Personal work', 'Travel', 'Exam', 'Other'];
   var OPEN = { 'Pending with Aakash': 1, 'Special – waiting': 1, 'Pending with Varun': 1 };
+  var GRANTED = { 'Approved': 1, 'Recorded': 1 };
+  var ABSENT = 'Absent – unannounced';
 
   var RULE_LABELS = { 'not-informed-over-30': 'Not informed, more than 30 min', 'not-informed-beyond-passes': 'Not informed, after the 3 passes',
     'extra-2-hours-beyond-bank': 'Extra 2 hours beyond the bank', 'unannounced-leave': 'Unannounced leave', 'emergency-beyond-2': 'Emergency leave beyond 2 in the month',
     'leave-in-restricted-period': 'Leave in a restricted period', 'absent-no-request': 'Absent with no request' };
   function ruleLabel(rule) { return RULE_LABELS[rule] || String(rule).replace('manual:', 'Recorded by Aakash: '); }
   function fail(code, message) { var e = new Error(message); e.code = code; throw e; }
+  /** A refusal whose side effects must still be saved (a wrong PIN is counted). */
+  function failKeep(code, message) { var e = new Error(message); e.code = code; e.keep = true; throw e; }
+  function hhmmToMin(t) { var a = t.split(':'); return +a[0] * 60 + +a[1]; }
+  function settingValue(ctx, key) { var s = ctx.db.rows('Settings').filter(function (x) { return x.key === key; })[0]; return s ? s.value : ''; }
+  /** Shop-closed days (Settings). A leave on a closed day uses no quota. */
+  function closedSet(ctx) {
+    var out = {};
+    try { (JSON.parse(settingValue(ctx, 'closedDays') || '[]') || []).forEach(function (d) { out[d] = true; }); } catch (e) { /* bad setting = no closed days */ }
+    return out;
+  }
+  /** Days on which the total away time is over 2 hours: a half day, or a full day over 4 h 30 min. */
+  function autoDays(ctx, personId) {
+    var sum = {};
+    ctx.db.rows('DayMinutes').forEach(function (m) { if (m.personId === personId) sum[m.date] = (sum[m.date] || 0) + m.minutes; });
+    return Object.keys(sum).sort().filter(function (d) { return sum[d] > Minutes.DEFAULTS.halfDayAfterMinutes; })
+      .map(function (d) { return { date: d, minutes: sum[d], amount: sum[d] > HALF_DAY_MINUTES ? 1 : 0.5 }; });
+  }
   function find(ctx, tab, id) { return ctx.db.rows(tab).filter(function (r) { return r.id === id; })[0]; }
   function audit(ctx, actor, action, ref, detail) {
     ctx.db.insert('Audit', { id: ctx.env.randomId(), at: ctx.now, actor: actor, action: action, ref: ref || '', detail: detail || {} });
@@ -885,31 +959,45 @@
   function loginLocked(ctx, personId, pin, deviceToken, deviceLabel) {
     var p = find(ctx, 'People', personId);
     if (!p || p.active === false) fail('LOGIN', 'Wrong name or PIN.');
-    if (p.pinLockedUntil && ctx.now < p.pinLockedUntil) fail('LOCKED', 'Too many wrong PINs. Try again in 15 minutes.');
-    if (!p.pinHash || ctx.env.sha256(p.pinSalt + ':' + pin) !== p.pinHash) {
-      var tries = (p.pinTries || 0) + 1;
-      var patch = { pinTries: tries };
-      if (tries >= PIN_MAX_TRIES) { patch.pinTries = 0; patch.pinLockedUntil = ctx.now + PIN_LOCK_MS; }
-      ctx.db.update('People', personId, patch);
-      audit(ctx, personId, 'login.wrong-pin', personId);
-      fail('LOGIN', 'Wrong name or PIN.');
-    }
-    ctx.db.update('People', personId, { pinTries: 0, pinLockedUntil: 0 });
-
+    var known = null;
     if (deviceToken) {
-      var hash = ctx.env.sha256(deviceToken);
-      var known = ctx.db.rows('Devices').filter(function (d) { return d.personId === personId && d.tokenHash === hash; })[0];
-      if (known) return { ok: known.status === 'approved', deviceStatus: known.status, deviceId: known.id };
+      var hash = ctx.env.sha256(String(deviceToken));
+      known = ctx.db.rows('Devices').filter(function (d) { return d.personId === personId && d.tokenHash === hash; })[0] || null;
     }
+    // The person's own approved phone has its own counter, so a stranger hammering the public
+    // sign-in screen cannot lock a staff member out of the phone they already use.
+    var own = known && known.status === 'approved';
+    var lockedUntil = own ? known.pinLockedUntil : p.pinLockedUntil;
+    if (lockedUntil && ctx.now < lockedUntil) fail('LOCKED', 'Too many wrong PINs. Try again later, or ask the owner to reset your PIN.');
+    if (!p.pinHash || ctx.env.sha256(p.pinSalt + ':' + pin) !== p.pinHash) {
+      var tries = ((own ? known.pinTries : p.pinTries) || 0) + 1;
+      var patch = { pinTries: tries };
+      if (tries >= PIN_MAX_TRIES) {
+        var level = own ? 1 : (p.pinLockLevel || 0) + 1;
+        patch.pinTries = 0; patch.pinLockedUntil = ctx.now + Math.min(PIN_LOCK_MAX_MS, PIN_LOCK_MS * Math.pow(4, level - 1));
+        if (!own) patch.pinLockLevel = level;
+      }
+      if (own) ctx.db.update('Devices', known.id, patch); else ctx.db.update('People', personId, patch);
+      audit(ctx, personId, 'login.wrong-pin', personId);
+      failKeep('LOGIN', 'Wrong name or PIN.');
+    }
+    // A right PIN clears only the counter it was checked against: signing in on the approved phone
+    // does not lift a lock that guesses from elsewhere have earned.
+    if (own) { if (known.pinTries || known.pinLockedUntil) ctx.db.update('Devices', known.id, { pinTries: 0, pinLockedUntil: 0 }); }
+    else if (p.pinTries || p.pinLockedUntil || p.pinLockLevel) ctx.db.update('People', personId, { pinTries: 0, pinLockedUntil: 0, pinLockLevel: 0 });
+
+    if (known) return { ok: known.status === 'approved', deviceStatus: known.status, deviceId: known.id };
+    var waiting = ctx.db.rows('Devices').filter(function (d) { return d.personId === personId && d.status === 'pending'; }).length;
+    if (waiting >= MAX_PENDING_PHONES) fail('BLOCKED', 'Phone requests for this account are already waiting. Ask the owner to approve or reject them.');
     var token = ctx.env.randomId() + ctx.env.randomId();
-    var dev = { id: ctx.env.randomId(), personId: personId, tokenHash: ctx.env.sha256(token), label: deviceLabel || '',
-      status: 'pending', requestedAt: ctx.now, decidedAt: '', decidedBy: '' };
+    var dev = { id: ctx.env.randomId(), personId: personId, tokenHash: ctx.env.sha256(token), label: String(deviceLabel || '').slice(0, 120),
+      status: 'pending', requestedAt: ctx.now, decidedAt: '', decidedBy: '', pinTries: 0, pinLockedUntil: 0 };
     // The owner's very first phone is approved automatically (otherwise nobody could approve anything).
     var anyOwnerDevice = ctx.db.rows('Devices').some(function (d) { var o = find(ctx, 'People', d.personId); return o && o.role === 'owner' && d.status === 'approved'; });
     if (p.role === 'owner' && !anyOwnerDevice) { dev.status = 'approved'; dev.decidedAt = ctx.now; dev.decidedBy = 'bootstrap'; }
     ctx.db.insert('Devices', dev);
     audit(ctx, personId, 'device.request', dev.id, { label: dev.label, status: dev.status });
-    if (dev.status === 'pending') byRole(ctx, 'owner').forEach(function (o) {
+    if (dev.status === 'pending' && !waiting) byRole(ctx, 'owner').forEach(function (o) {
       notify(ctx, o.id, 'device', 'New phone request', p.name + ' wants to sign in on a new phone.', dev.id);
     });
     return { ok: dev.status === 'approved', deviceStatus: dev.status, deviceId: dev.id, deviceToken: token };
@@ -921,6 +1009,16 @@
   function decideDeviceLocked(ctx, actor, deviceId, approve) {
     if (actor.role !== 'owner') fail('FORBIDDEN', 'Only the owner can approve a phone.');
     var dev = find(ctx, 'Devices', deviceId);
+    if (dev && dev.status === 'approved' && !approve) {
+      // Lost or stolen phone: the owner switches it off. It can never be used again.
+      var owner = find(ctx, 'People', dev.personId);
+      var otherOwnerPhones = ctx.db.rows('Devices').filter(function (d) { var o = find(ctx, 'People', d.personId); return d.id !== dev.id && d.status === 'approved' && o && o.role === 'owner' && o.active !== false; }).length;
+      if (owner && owner.role === 'owner' && !otherOwnerPhones) fail('BLOCKED', 'This is the only approved owner phone. Approve another owner phone first.');
+      ctx.db.update('Devices', deviceId, { status: 'revoked', decidedAt: ctx.now, decidedBy: actor.id });
+      audit(ctx, actor.id, 'device.revoke', deviceId);
+      notify(ctx, dev.personId, 'device', 'Phone removed', 'This phone can no longer use the app. Ask the owner.', deviceId);
+      return { ok: true, status: 'revoked' };
+    }
     if (!dev || dev.status !== 'pending') fail('NOT_FOUND', 'No such pending phone request.');
     if (approve) {
       // One phone per person: approving a new phone revokes the old one.
@@ -975,7 +1073,7 @@
 
   function liveLeaves(ctx, personId, exceptId) {
     return ctx.db.rows('LeaveRequests').filter(function (r) {
-      return r.personId === personId && r.id !== exceptId && (r.status === 'Approved' || r.status === 'Recorded' || OPEN[r.status]);
+      return r.personId === personId && r.id !== exceptId && (GRANTED[r.status] || OPEN[r.status] || r.status === ABSENT);
     });
   }
 
@@ -989,16 +1087,18 @@
    * Evaluate a request against every rule. Used for the live preview and again on submit,
    * on edit and at approval time. Never writes.
    */
-  function evaluate(ctx, person, input, exceptId) {
+  function evaluate(ctx, person, input, exceptId, opts) {
     var problems = [];
     var dates = (input.dates || []).slice().sort();
     if (!dates.length) problems.push('Pick exact dates.');
     dates.forEach(function (d, i) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) problems.push('Invalid date.');
+      if (!Cal.isDate(d)) problems.push('Invalid date.');
       if (i && Cal.addDays(dates[i - 1], 1) !== d) problems.push('Dates in one request must be consecutive.');
     });
     if (input.kind !== 'full' && input.kind !== 'half') problems.push('Choose full day or half day.');
-    if (input.kind === 'half' && (dates.length !== 1 || !/^\d{2}:\d{2}$/.test(input.halfStart || ''))) problems.push('A half day is one date with a start time.');
+    if (input.kind === 'half' && (dates.length !== 1 || !Cal.isTime(input.halfStart))) problems.push('A half day is one date with a start time.');
+    else if (input.kind === 'half' && (hhmmToMin(input.halfStart) < hhmmToMin(person.dutyStart) || hhmmToMin(input.halfStart) + HALF_DAY_MINUTES > hhmmToMin(person.dutyEnd)))
+      problems.push('The half day (4 h 30 min) must be inside your duty hours.');
     if (REASONS.indexOf(input.reasonCode) === -1) problems.push('Choose a reason.');
     if (!String(input.reasonText || '').trim()) problems.push('Write the reason.');
     if (problems.length) return { decision: 'blocked', reasons: problems, valid: false };
@@ -1010,8 +1110,11 @@
     var overlap = others.some(function (r) { return r.dates.some(function (d) { return dates.indexOf(d) !== -1; }); });
     if (overlap) return { decision: 'blocked', reasons: ['You already have a request on one of these dates. Edit or cancel it first.'], valid: false };
 
-    var dutyStartAt = toMs(dates[0], input.kind === 'half' ? input.halfStart : person.dutyStart);
-    var submittedAt = input.submittedAt || ctx.now;
+    // Notice runs from the SERVER time of sending to the person's duty start on the first leave day
+    // (handoff 3.4), also for a half day. Nothing the phone sends can change that time; only an
+    // entry by Aakash or Varun may carry the time of the phone call it records (opts.at).
+    var dutyStartAt = toMs(dates[0], person.dutyStart);
+    var submittedAt = (opts && opts.at) || ctx.now;
     var noticeHours = (dutyStartAt - submittedAt) / 3600000;
     var type = Leave.noticeType(submittedAt, dutyStartAt);
 
@@ -1025,23 +1128,31 @@
 
     // Emergency number in the month of the first day.
     var month = Cal.monthKey(dates[0]);
+    var closed = closedSet(ctx);
     var emergencyNo = 0;
     if (type === 'Emergency') {
       emergencyNo = 1 + others.filter(function (r) { return r.type === 'Emergency' && Cal.monthKey(r.dates[0]) === month; }).length;
     }
     var penaltyEmergency = emergencyNo > 0 && Leave.isPenaltyEmergency(emergencyNo);
 
-    // Quota after this request (first month only for the routing check; the month page splits per month).
+    // Quota after this request, for EVERY month the request touches (a leave across a month end
+    // is checked against both months). Counted: leaves, auto absences, automatic half days.
     var amount = input.kind === 'half' ? 0.5 : 1;
     var days = [];
-    others.forEach(function (r) { r.dates.forEach(function (d) { days.push({ date: d, amount: r.kind === 'half' ? 0.5 : 1, penaltyEmergency: !!r.penaltyEmergency }); }); });
-    dates.forEach(function (d) { days.push({ date: d, amount: amount, penaltyEmergency: penaltyEmergency }); });
-    var quota = Leave.monthQuota(person, month, days);
+    others.forEach(function (r) { r.dates.forEach(function (d) { if (!closed[d]) days.push({ date: d, amount: r.kind === 'half' ? 0.5 : 1, penaltyEmergency: !!r.penaltyEmergency && !!GRANTED[r.status] }); }); });
+    autoDays(ctx, person.id).forEach(function (a) { days.push({ date: a.date, amount: a.amount }); });
+    dates.forEach(function (d) { if (!closed[d]) days.push({ date: d, amount: amount, penaltyEmergency: penaltyEmergency }); });
+    var quota = Leave.monthQuota(person, month, days), worst = quota;
+    dates.forEach(function (d) {
+      var q = Leave.monthQuota(person, Cal.monthKey(d), days);
+      if (q.total > worst.total) worst = q;
+    });
+    var leaveDays = dates.filter(function (d) { return !closed[d] && !Cal.isRosterOff(person, d); }).length;
 
     var routed = Leave.route({
       person: { noApproval: person.noApproval, isManager: person.role === 'manager', alwaysAakash: person.group === 'Housekeeping' },
-      days: dates.length, run: run, noticeHours: noticeHours, type: type,
-      clash: clash, restricted: restr.blocked, quotaAfter: quota.total,
+      days: leaveDays, run: run, noticeHours: noticeHours, type: type, restrictionViolation: restr.violations > 0,
+      clash: clash, restricted: restr.blocked, quotaAfter: worst.total,
       violationsThisMonth: violationsInMonth(ctx, person.id, Cal.monthKey(today(ctx)))
     });
     if (restr.blocked) routed.reasons = restr.hits.map(function (h) { return h.message; });
@@ -1050,14 +1161,14 @@
     if (type === 'Unannounced') warnings.push('Less than 3 hours notice: this is an unannounced leave and counts as 1 violation.');
     if (penaltyEmergency) warnings.push('This is emergency no. ' + emergencyNo + ' this month: 1 violation, and it is not a free leave.');
     if (restr.violations) warnings.push(restr.hits[0].message);
-    if (quota.daysAboveQuota > 0 && !person.noQuota) warnings.push('Above the 5 free leaves this month by ' + quota.daysAboveQuota + '.');
+    if (worst.daysAboveQuota > 0 && !person.noQuota) warnings.push('Above the 5 free leaves ' + (worst === quota ? 'this month' : 'in the second month') + ' by ' + worst.daysAboveQuota + '.');
     if (clash.extremeEmergencyPossible) warnings.push('Only possible as an extreme emergency, with Aakash’s approval.');
 
     return {
       valid: true, decision: routed.decision, reasons: routed.reasons, warnings: warnings,
-      dates: dates, type: type, noticeHours: Math.round(noticeHours * 10) / 10, run: run,
+      dates: dates, type: type, noticeHours: Math.round(noticeHours * 10) / 10, run: run, submittedAt: submittedAt,
       emergencyNo: emergencyNo, penaltyEmergency: penaltyEmergency, restrictionViolation: restr.violations > 0,
-      quota: person.noQuota ? null : { total: quota.total, left: quota.left, daysAboveQuota: quota.daysAboveQuota }
+      quota: person.noQuota ? null : { total: worst.total, left: worst.left, daysAboveQuota: worst.daysAboveQuota }
     };
   }
 
@@ -1066,14 +1177,55 @@
   }
 
   function addViolation(ctx, personId, date, rule, ref) {
+    var who = find(ctx, 'People', personId);
+    if (who && who.noApproval) return; // records only (intern): never a violation
     ctx.db.insert('Violations', { id: ctx.env.randomId(), personId: personId, date: date, rule: rule, source: 'auto', proof: ref,
       note: '', createdBy: 'system', createdAt: ctx.now, disputeState: '', disputeAt: '', disputeText: '', disputeDecidedBy: '', disputeDecidedAt: '' });
     byRole(ctx, 'owner').concat(byRole(ctx, 'manager')).forEach(function (m) { notify(ctx, m.id, 'violation', 'Violation recorded', ruleLabel(rule), ref); });
     notify(ctx, personId, 'violation', 'Violation recorded', ruleLabel(rule) + '. You can dispute it within 24 hours.', ref);
   }
 
+  /** Violations that came from a request are withdrawn (never deleted) when the request is edited or cancelled. */
+  function withdrawViolations(ctx, leaveId, note) {
+    ctx.db.rows('Violations').forEach(function (v) { if (v.proof === leaveId && v.disputeState !== 'removed') ctx.db.update('Violations', v.id, { disputeState: 'removed', note: note }); });
+  }
+
+  /** "Absent – unannounced" for one date (full day, or the half that no leave covers) + 1 violation. */
+  function markAbsent(ctx, p, date, kind, why) {
+    var row = { id: ctx.env.randomId(), personId: p.id, kind: kind || 'full', dates: [date], halfStart: '', reasonCode: '', reasonText: '', submittedAt: ctx.now,
+      type: 'Unannounced', noticeHours: 0, run: 1, route: 'system', status: p.noApproval ? 'Recorded' : ABSENT, approvals: {},
+      extremeEmergency: false, emergencyNo: 0, penaltyEmergency: false, restrictionViolation: false, enteredBy: 'system', decidedAt: ctx.now,
+      decidedBy: 'system', decisionReason: why || '', history: [{ at: ctx.now, by: 'system', action: 'absent-no-request' }] };
+    ctx.db.insert('LeaveRequests', row);
+    var day = date.slice(8) + '-' + date.slice(5, 7);
+    if (!p.noApproval) {
+      ctx.db.insert('Violations', { id: ctx.env.randomId(), personId: p.id, date: date, rule: 'absent-no-request', source: 'auto', proof: row.id, note: '',
+        createdBy: 'system', createdAt: ctx.now, disputeState: '', disputeAt: '', disputeText: '', disputeDecidedBy: '', disputeDecidedAt: '' });
+      notify(ctx, p.id, 'violation', ABSENT, (why || 'No request and no check-in') + ' on ' + day + '.', row.id);
+    }
+    byRole(ctx, 'owner').concat(byRole(ctx, 'manager')).forEach(function (m) { notify(ctx, m.id, 'absent', ABSENT + ': ' + p.name, day + (kind === 'half' ? ' (half day)' : ''), row.id); });
+    audit(ctx, 'system', 'absent.auto', row.id);
+    return row;
+  }
+  function hasCheckIn(ctx, personId, date) {
+    return ctx.db.rows('Punches').some(function (x) { return x.personId === personId && x.date === date && x.kind === 'in'; });
+  }
+  /** Has this working day ended for the person (server time)? */
+  function dayOver(ctx, person, date) { return ctx.now >= toMs(date, person.dutyEnd); }
+
   /** Called whenever a request becomes Approved or Recorded. */
   function onGranted(ctx, r) {
+    // Which emergency of the month this is, is settled NOW, among the GRANTED ones only:
+    // a request that was rejected or is still waiting never pushes another one over the limit.
+    if (r.type === 'Emergency') {
+      var month = Cal.monthKey(r.dates[0]);
+      var n = 1 + ctx.db.rows('LeaveRequests').filter(function (x) {
+        return x.id !== r.id && x.personId === r.personId && x.type === 'Emergency' && GRANTED[x.status] && Cal.monthKey(x.dates[0]) === month;
+      }).length;
+      var pen = Leave.isPenaltyEmergency(n);
+      if (n !== r.emergencyNo || pen !== !!r.penaltyEmergency) ctx.db.update('LeaveRequests', r.id, { emergencyNo: n, penaltyEmergency: pen });
+      r = Object.assign({}, r, { emergencyNo: n, penaltyEmergency: pen });
+    } else if (r.penaltyEmergency) { ctx.db.update('LeaveRequests', r.id, { penaltyEmergency: false }); r = Object.assign({}, r, { penaltyEmergency: false }); }
     if (r.type === 'Unannounced') addViolation(ctx, r.personId, r.dates[0], 'unannounced-leave', r.id);
     if (r.penaltyEmergency) addViolation(ctx, r.personId, r.dates[0], 'emergency-beyond-2', r.id);
     if (r.restrictionViolation) addViolation(ctx, r.personId, r.dates[0], 'leave-in-restricted-period', r.id);
@@ -1091,7 +1243,16 @@
       if (personId !== actor.id && actor.role === 'staff') fail('FORBIDDEN', 'You can apply only for yourself.');
       var person = find(ctx, 'People', personId);
       if (!person) fail('NOT_FOUND', 'No such person.');
-      var ev = evaluate(ctx, person, input);
+      var opts = null, called = '';
+      if (personId !== actor.id && input.calledAt !== undefined && input.calledAt !== '') {
+        // "Called – emergency": Aakash records a phone call. Notice runs from the time of the call.
+        if (!Cal.isTime(input.calledAt)) fail('BLOCKED', 'Enter the exact time of the call.');
+        var at = toMs(today(ctx), input.calledAt);
+        if (at > ctx.now) at -= 86400000; // a time later than now means yesterday evening
+        if (ctx.now - at > 86400000) fail('BLOCKED', 'The call time must be within the last 24 hours.');
+        opts = { at: at }; called = input.calledAt;
+      }
+      var ev = evaluate(ctx, person, input, undefined, opts);
       if (ev.decision === 'blocked') fail('BLOCKED', ev.reasons.join(' '));
       var row = {
         id: ctx.env.randomId(), personId: personId, kind: input.kind, dates: ev.dates, halfStart: input.halfStart || '',
@@ -1100,7 +1261,7 @@
         approvals: ev.decision === 'special' ? { aakash: '', varun: '' } : {}, extremeEmergency: !!input.extremeEmergency,
         emergencyNo: ev.emergencyNo, penaltyEmergency: ev.penaltyEmergency, restrictionViolation: ev.restrictionViolation,
         enteredBy: personId === actor.id ? '' : actor.id, decidedAt: '', decidedBy: '', decisionReason: '',
-        history: [{ at: ctx.now, by: actor.id, action: 'submitted' }]
+        history: [{ at: ctx.now, by: actor.id, action: called ? 'called – emergency (' + called + ')' : 'submitted' }]
       };
       if (ev.decision === 'auto' || ev.decision === 'recorded') { row.decidedAt = ctx.now; row.decidedBy = 'system'; }
       ctx.db.insert('LeaveRequests', row);
@@ -1136,7 +1297,19 @@
         return { id: id, status: status };
       }
 
-      if (!approve) return finish('Rejected', reason);
+      if (!approve) {
+        var out = finish('Rejected', reason);
+        // Rejected after the day has already gone by with no check-in: that day is an absence with no approval.
+        r.dates.forEach(function (d) {
+          if (d > today(ctx) || Cal.isRosterOff(person, d) || closedSet(ctx)[d] || hasCheckIn(ctx, person.id, d) || !dayOver(ctx, person, d)) return;
+          if (r.kind === 'half') return; // the person was due for the other half; the end-of-day job has dealt with it
+          markAbsent(ctx, person, d, 'full', 'Leave request rejected, and no check-in');
+        });
+        return out;
+      }
+      // A restriction added after the request was sent still holds: only Varun can override it.
+      var restr = Leave.checkRestrictions(person.name, person, r.dates, ctx.db.rows('Restrictions'));
+      if (restr.blocked) fail('BLOCKED', restr.hits.filter(function (h) { return h.rule === 'no-leave'; })[0].message + ' Reject it, or Varun can override.');
 
       if (r.route === 'special') {
         var key = actor.role === 'owner' ? 'varun' : 'aakash';
@@ -1154,6 +1327,12 @@
       if (!clash.ok) {
         var res = finish('Rejected – clash', clash.blocks[0].message);
         byRole(ctx, 'manager').forEach(function (m) { notify(ctx, m.id, 'clash', 'Rejected – clash', person.name + ': ' + clash.blocks[0].message, id); });
+        // The person who holds the slot is told too (never the other person's reason).
+        var holders = {}; clash.blocks.forEach(function (b) { (b.who || []).forEach(function (w) { holders[w] = b.date; }); });
+        Object.keys(holders).forEach(function (name) {
+          var h = peopleMap(ctx)[name];
+          if (h) notify(ctx, h.id, 'clash', 'A clashing request was rejected', person.name + ' asked for ' + r.dates.join(', ') + '. Your approved time off keeps the slot.', id);
+        });
         return res;
       }
       return finish('Approved', reason);
@@ -1164,7 +1343,7 @@
   function cancelLeave(ctx, actor, id, reason) {
     return ctx.env.withLock(function () {
       var r = find(ctx, 'LeaveRequests', id);
-      if (!r || r.status === 'Cancelled' || r.status.indexOf('Rejected') === 0) fail('NOT_FOUND', 'Nothing to cancel.');
+      if (!r || r.status === 'Cancelled' || r.status.indexOf('Rejected') === 0 || r.route === 'system') fail('NOT_FOUND', 'Nothing to cancel.');
       var person = find(ctx, 'People', r.personId);
       var started = ctx.now >= toMs(r.dates[0], r.kind === 'half' ? r.halfStart : person.dutyStart);
       var isBoss = actor.role !== 'staff';
@@ -1172,6 +1351,7 @@
       if (started && !isBoss) fail('FORBIDDEN', 'This leave has started. Ask Aakash or Varun.');
       if (isBoss && actor.id !== r.personId && !String(reason || '').trim()) fail('REASON', 'A reason is required.');
       ctx.db.update('LeaveRequests', id, { status: 'Cancelled', history: r.history.concat([{ at: ctx.now, by: actor.id, action: 'cancelled', reason: reason || '' }]) });
+      if (!started) withdrawViolations(ctx, id, 'Request cancelled before it started');
       audit(ctx, actor.id, 'leave.cancel', id, { reason: reason || '' });
       if (actor.id !== r.personId) notify(ctx, r.personId, 'decision', 'Leave cancelled', r.dates.join(', ') + ' — ' + reason, id);
       return { id: id, status: 'Cancelled' };
@@ -1180,7 +1360,8 @@
 
   var api = { REASONS: REASONS, setPin: setPin, login: login, decideDevice: decideDevice, authenticate: authenticate,
     previewLeave: previewLeave, submitLeave: submitLeave, decideLeave: decideLeave, cancelLeave: cancelLeave, toMs: toMs,
-    _: { fail: fail, find: find, audit: audit, notify: notify, byRole: byRole, today: today, peopleMap: peopleMap, rules: rules,
+    _: { fail: fail, failKeep: failKeep, closedSet: closedSet, autoDays: autoDays, markAbsent: markAbsent, hasCheckIn: hasCheckIn, dayOver: dayOver,
+      withdrawViolations: withdrawViolations, GRANTED: GRANTED, ABSENT: ABSENT, HALF_DAY_MINUTES: HALF_DAY_MINUTES, settingValue: settingValue, hhmmToMin: hhmmToMin, find: find, audit: audit, notify: notify, byRole: byRole, today: today, peopleMap: peopleMap, rules: rules,
       approvedAway: approvedAway, liveLeaves: liveLeaves, IST_OFFSET_MS: IST_OFFSET_MS,
       evaluate: evaluate, onGranted: onGranted, ruleLabel: ruleLabel, STATUS_FOR: STATUS_FOR, OPEN: OPEN } };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -1221,12 +1402,20 @@
   function expectedDay(ctx, person, date) {
     var start = hhmmToMin(person.dutyStart), end = hhmmToMin(person.dutyEnd);
     var lv = grantedLeaveOn(ctx, person.id, date);
-    if (lv && lv.kind === 'half') {
+    var win = null;
+    if (lv && lv.kind === 'half' && lv.halfStart) {
       var hs = hhmmToMin(lv.halfStart), he = hs + HALF_DAY_MINUTES;
       if (hs <= start) start = Math.min(he, end);
       else if (he >= end) end = hs;
+      else win = { from: hs, to: he }; // a half day in the middle of the shift: an approved window
     }
-    return { start: start, end: end, fullLeave: !!(lv && lv.kind === 'full') };
+    return { start: start, end: end, win: win, fullLeave: !!(lv && lv.kind === 'full') };
+  }
+  /** Duty minutes between a and b that are NOT inside the approved half-day window. */
+  function uncovered(a, b, win) {
+    if (b <= a) return 0;
+    var inside = win ? Math.max(0, Math.min(b, win.to) - Math.max(a, win.from)) : 0;
+    return (b - a) - inside;
   }
 
   function punchesToday(ctx, personId, date, kind) {
@@ -1266,8 +1455,9 @@
     return ctx.env.withLock(function () {
       var person = H.find(ctx, 'People', actor.id);
       var date = a.date || H.today(ctx);
+      if (!Cal.isDate(date)) H.fail('BLOCKED', 'Pick an exact date.');
       if (a.kind !== 'late' && a.kind !== 'early') H.fail('BLOCKED', 'Choose late or early.');
-      if (!/^\d{2}:\d{2}$/.test(a.time || '')) H.fail('BLOCKED', 'Enter the exact time.');
+      if (!Cal.isTime(a.time)) H.fail('BLOCKED', 'Enter the exact time.');
       if (date < H.today(ctx)) H.fail('BLOCKED', 'This date has passed.');
       var day = expectedDay(ctx, person, date), t = hhmmToMin(a.time);
       if (day.fullLeave) H.fail('BLOCKED', 'You are on leave that day.');
@@ -1331,9 +1521,13 @@
       var flag = [];
       var distance = '';
       var shop = setting(ctx, 'shopPoint');
-      if (shop && a.lat !== undefined && a.lat !== '') {
+      var num = function (v, max) { return typeof v === 'number' && isFinite(v) && Math.abs(v) <= max; };
+      var located = num(a.lat, 90) && num(a.lng, 180);
+      if (!located) { a.lat = ''; a.lng = ''; }               // anything that is not a real reading is "no location"
+      if (!(typeof a.accuracy === 'number' && isFinite(a.accuracy) && a.accuracy >= 0)) a.accuracy = '';
+      if (shop && located) {
         var pt = JSON.parse(shop);
-        distance = distanceM(pt.lat, pt.lng, +a.lat, +a.lng);
+        distance = distanceM(pt.lat, pt.lng, a.lat, a.lng);
         if (distance > SHOP_RADIUS_M) flag.push('outside-shop-area');
       } else if (shop) flag.push('no-location');
       if (day.fullLeave || Cal.isRosterOff(person, date)) flag.push('off-day');
@@ -1349,7 +1543,7 @@
       }
       ctx.db.insert('Punches', punch);
 
-      var late = nowMin(ctx) - day.start, counted = null;
+      var late = uncovered(day.start, nowMin(ctx), day.win), counted = null;
       if (!day.fullLeave && !Cal.isRosterOff(person, date) && late > Minutes.DEFAULTS.lateGraceMinutes) {
         var q = activeShort(ctx, actor.id, date, 'late');
         // "Informed" only if it was applied before duty start AND Aakash approved it.
@@ -1376,15 +1570,15 @@
       var punch = { id: ctx.env.randomId(), personId: actor.id, date: date, kind: 'out', at: ctx.now, photoId: '', lat: '', lng: '',
         accuracy: '', distance: '', deviceId: actor.deviceId || '', flag: '', note: '' };
       ctx.db.insert('Punches', punch);
-      var now = nowMin(ctx), early = day.end - now;
+      var now = nowMin(ctx), early = uncovered(now, day.end, day.win);
       if (!day.fullLeave && !Cal.isRosterOff(person, date) && early > 0) {
         var q = activeShort(ctx, actor.id, date, 'early');
         var stated = q ? hhmmToMin(q.time) : null;
         var ok = !!q && q.status === 'Approved', wait = q && q.status === 'Pending' ? q.id : '';
         if (q && now >= stated) addDayMinutes(ctx, actor.id, date, 'early', early, ok, undefined, punch.id, wait);
         else if (q) { // left before the stated time: the extra minutes are not informed
-          addDayMinutes(ctx, actor.id, date, 'early', day.end - stated, ok, undefined, punch.id, wait);
-          addDayMinutes(ctx, actor.id, date, 'early', stated - now, false, undefined, punch.id);
+          if (uncovered(stated, day.end, day.win) > 0) addDayMinutes(ctx, actor.id, date, 'early', uncovered(stated, day.end, day.win), ok, undefined, punch.id, wait);
+          if (uncovered(now, stated, day.win) > 0) addDayMinutes(ctx, actor.id, date, 'early', uncovered(now, stated, day.win), false, undefined, punch.id);
         } else addDayMinutes(ctx, actor.id, date, 'early', early, false, undefined, punch.id);
         syncViolations(ctx, actor.id, Cal.monthKey(date));
       }
@@ -1410,12 +1604,11 @@
       boss(actor);
       var p = H.find(ctx, 'Punches', punchId);
       if (!p || !p.dress || p.dressDecision || !dressIssues(p.dress).length) H.fail('NOT_FOUND', 'Nothing to decide.');
+      var result = { id: punchId, decision: 'dismissed' };
+      if (confirm) result = Object.assign({ decision: 'confirmed' }, recordIncident(ctx, actor, { personId: p.personId, item: 'dress', date: p.date, note: 'Dress check: ' + dressIssues(p.dress).join(', '), photoId: p.photoId }));
       ctx.db.update('Punches', punchId, { dressDecision: confirm ? 'confirmed' : 'dismissed' });
       H.audit(ctx, actor.id, confirm ? 'dress.confirm' : 'dress.dismiss', punchId);
-      if (!confirm) return { id: punchId, decision: 'dismissed' };
-      return ctx.env.withLock(function () {
-        return Object.assign({ decision: 'confirmed' }, recordIncident(ctx, actor, { personId: p.personId, item: 'dress', date: p.date, note: 'Dress check: ' + dressIssues(p.dress).join(', '), photoId: p.photoId }));
-      });
+      return result;
     });
   }
 
@@ -1426,7 +1619,7 @@
       var person = H.find(ctx, 'People', a.personId), date = H.today(ctx);
       if (!person || person.role !== 'staff') H.fail('NOT_FOUND', 'Choose a staff member.');
       if (!String(a.reason || '').trim()) H.fail('REASON', 'Write why the person could not check in.');
-      if (!/^\d{2}:\d{2}$/.test(a.time || '')) H.fail('BLOCKED', 'Enter the exact arrival time.');
+      if (!Cal.isTime(a.time)) H.fail('BLOCKED', 'Enter the exact arrival time.');
       if (punchesToday(ctx, a.personId, date, 'in').length) H.fail('BLOCKED', 'Already checked in today.');
       var at = Core.toMs(date, a.time);
       if (at > ctx.now) H.fail('BLOCKED', 'The time cannot be in the future.');
@@ -1435,6 +1628,27 @@
       ctx.db.update('Punches', r.id, { enteredBy: actor.id, note: 'Entered by ' + actor.name + ': ' + String(a.reason).trim(), flag: 'entered-by-manager' });
       H.audit(ctx, actor.id, 'punch.manual', r.id, { personId: a.personId, time: a.time, reason: a.reason });
       return { id: r.id, lateMinutes: r.lateMinutes };
+    });
+  }
+
+  /** A forgotten check-out: Aakash enters the time the person left, with a reason. Labelled "entered by". */
+  function manualCheckOut(ctx, actor, a) {
+    return ctx.env.withLock(function () {
+      boss(actor);
+      var person = H.find(ctx, 'People', a.personId), date = a.date || H.today(ctx);
+      if (!person) H.fail('NOT_FOUND', 'Choose a person.');
+      if (!Cal.isDate(date) || date > H.today(ctx)) H.fail('BLOCKED', 'Pick the date.');
+      if (!String(a.reason || '').trim()) H.fail('REASON', 'Write why the check-out is entered by hand.');
+      if (!Cal.isTime(a.time)) H.fail('BLOCKED', 'Enter the exact time the person left.');
+      var pin = punchesToday(ctx, a.personId, date, 'in')[0];
+      if (!pin) H.fail('BLOCKED', 'There is no check-in on that day.');
+      if (punchesToday(ctx, a.personId, date, 'out').length) H.fail('BLOCKED', 'Already checked out on that day.');
+      var at = Core.toMs(date, a.time);
+      if (at > ctx.now || at < pin.at) H.fail('BLOCKED', 'The time must be after the check-in and not in the future.');
+      var r = checkOut({ db: ctx.db, env: ctx.env, now: at }, { id: person.id, name: person.name, role: person.role, deviceId: '' });
+      ctx.db.update('Punches', r.id, { enteredBy: actor.id, note: 'Entered by ' + actor.name + ': ' + String(a.reason).trim(), flag: 'entered-by-manager' });
+      H.audit(ctx, actor.id, 'punch.manual-out', r.id, { personId: a.personId, date: date, time: a.time, reason: a.reason });
+      return { id: r.id, earlyMinutes: r.earlyMinutes };
     });
   }
 
@@ -1500,10 +1714,24 @@
     return ctx.env.withLock(function () {
       boss(actor);
       var o = H.find(ctx, 'Outings', id);
+      if (o && o.status === 'Approved') {
+        // The person never tapped "I'm back": Aakash closes the outing with the time they returned.
+        if (!Cal.isTime(correctedTime)) H.fail('BLOCKED', 'Enter the exact time the person came back.');
+        var back = Core.toMs(o.date, correctedTime);
+        if (back < o.approvedAt || back > ctx.now) H.fail('BLOCKED', 'That time is outside the outing.');
+        var mins = outingMinutes(o, back);
+        ctx.db.update('Outings', id, { status: 'Confirmed', backAt: back, correctedBackAt: back, minutes: mins, confirmedAt: ctx.now, confirmedBy: actor.id });
+        var made = addDayMinutes(ctx, o.personId, o.date, 'out', mins, true, undefined, id);
+        ctx.db.update('DayMinutes', made.id, { note: 'Closed by ' + actor.name });
+        syncViolations(ctx, o.personId, Cal.monthKey(o.date));
+        H.audit(ctx, actor.id, 'out.close', id, { back: back, minutes: mins });
+        H.notify(ctx, o.personId, 'out', 'Going out closed by ' + actor.name, mins + ' min counted (back at ' + correctedTime + ').', id);
+        return { id: id, status: 'Confirmed', minutes: mins };
+      }
       if (!o || o.status !== 'Back') H.fail('NOT_FOUND', 'Nothing to confirm.');
       var patch = { status: 'Confirmed', confirmedAt: ctx.now, confirmedBy: actor.id };
       if (correctedTime) {
-        if (!/^\d{2}:\d{2}$/.test(correctedTime)) H.fail('BLOCKED', 'Enter the exact time.');
+        if (!Cal.isTime(correctedTime)) H.fail('BLOCKED', 'Enter the exact time.');
         var corrected = Core.toMs(o.date, correctedTime);
         if (corrected < o.approvedAt || corrected > ctx.now) H.fail('BLOCKED', 'That time is outside the outing.');
         patch.correctedBackAt = corrected; patch.minutes = outingMinutes(o, corrected);
@@ -1518,12 +1746,16 @@
     });
   }
 
+  var REMIND_GAP_MS = 10 * 60000;
   function remindBack(ctx, actor, id) {
-    var o = H.find(ctx, 'Outings', id);
-    if (!o || o.personId !== actor.id || o.status !== 'Back') H.fail('NOT_FOUND', 'Nothing to remind.');
-    ctx.db.update('Outings', id, { remindedAt: ctx.now });
-    H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'out', 'Reminder: confirm ' + H.find(ctx, 'People', actor.id).name + ' is back', '', id); });
-    return { ok: true };
+    return ctx.env.withLock(function () {
+      var o = H.find(ctx, 'Outings', id);
+      if (!o || o.personId !== actor.id || o.status !== 'Back') H.fail('NOT_FOUND', 'Nothing to remind.');
+      if (o.remindedAt && ctx.now - o.remindedAt < REMIND_GAP_MS) H.fail('BLOCKED', 'A reminder was sent a few minutes ago.');
+      ctx.db.update('Outings', id, { remindedAt: ctx.now });
+      H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'out', 'Reminder: confirm ' + H.find(ctx, 'People', actor.id).name + ' is back', '', id); });
+      return { ok: true };
+    });
   }
 
   // ---------- Month calculation ----------
@@ -1558,6 +1790,8 @@
 
   /** Keep the Violations tab in step with the minute rules. Never deletes: a dropped one is marked removed. */
   function syncViolations(ctx, personId, monthKey) {
+    var who = H.find(ctx, 'People', personId);
+    if (who && who.noApproval) return; // records only (intern): never a violation
     var mm = monthMinutes(ctx, personId, monthKey);
     var wanted = {}, perEvent = {};
     mm.run.violations.forEach(function (v) {
@@ -1569,7 +1803,11 @@
     // 30 min" is still a violation on that day.
     var convertedDates = {}; mm.converted.forEach(function (c) { convertedDates[c.date] = true; });
     ctx.db.rows('DayMinutes').forEach(function (m) {
-      if (m.personId === personId && convertedDates[m.date] && !m.informed && m.minutes > Minutes.DEFAULTS.notInformedMaxMinutes) {
+      if (m.personId !== personId || !convertedDates[m.date]) return;
+      // The part nobody was told about: everything when not informed; when informed, the minutes after the stated time.
+      var stated = m.statedMinutes === '' || m.statedMinutes === undefined || m.statedMinutes === null ? null : m.statedMinutes;
+      var silent = !m.informed ? m.minutes : (stated === null ? 0 : Math.max(0, m.minutes - stated));
+      if (silent > Minutes.DEFAULTS.notInformedMaxMinutes) {
         wanted['dm:' + m.id + ':not-informed-over-30:1'] = { rule: 'not-informed-over-30', date: m.date };
       }
     });
@@ -1595,13 +1833,19 @@
   function myMonth(ctx, personId, monthKey) {
     var person = H.find(ctx, 'People', personId);
     var mm = monthMinutes(ctx, personId, monthKey);
-    var leaves = ctx.db.rows('LeaveRequests').filter(function (r) {
-      return r.personId === personId && (r.status === 'Approved' || r.status === 'Recorded' || r.status === 'Absent – unannounced');
-    });
+    var closed = H.closedSet(ctx), today = H.today(ctx), undecided = [];
     var days = [], emergencies = 0;
-    leaves.forEach(function (r) {
-      if (r.type === 'Emergency' && Cal.monthKey(r.dates[0]) === monthKey) emergencies += 1;
-      r.dates.forEach(function (d) { days.push({ date: d, amount: r.kind === 'half' ? 0.5 : 1, penaltyEmergency: !!r.penaltyEmergency }); });
+    ctx.db.rows('LeaveRequests').forEach(function (r) {
+      if (r.personId !== personId) return;
+      var counted = H.GRANTED[r.status] || r.status === H.ABSENT;
+      if (counted && r.type === 'Emergency' && Cal.monthKey(r.dates[0]) === monthKey) emergencies += 1;
+      r.dates.forEach(function (d) {
+        if (closed[d]) return; // the shop was closed: no leave is used
+        // A request nobody decided, for a day that has gone by with no check-in, is still a day away.
+        var gone = !counted && H.OPEN[r.status] && d <= today && !Cal.isRosterOff(person, d) && H.dayOver(ctx, person, d) && !H.hasCheckIn(ctx, personId, d);
+        if (gone && Cal.monthKey(d) === monthKey) undecided.push(d);
+        if (counted || gone) days.push({ date: d, amount: r.kind === 'half' ? 0.5 : 1, penaltyEmergency: !!r.penaltyEmergency && counted });
+      });
     });
     mm.converted.forEach(function (c) { days.push({ date: c.date, amount: c.amount }); });
     var salary = mm.pay ? mm.pay.fixedSalary : 0;
@@ -1617,7 +1861,7 @@
     return {
       month: monthKey, personId: personId, name: person.name, onPayroll: !person.noQuota,
       leaves: { total: quota.total, free: Leave.CFG.freeLeaves, left: quota.left, rosterSundays: quota.rosterSundays, taken: quota.leavesTaken,
-        emergencies: emergencies, emergenciesAllowed: Leave.CFG.maxEmergencies, daysCut: quota.daysCut, autoHalfDays: mm.converted },
+        emergencies: emergencies, emergenciesAllowed: Leave.CFG.maxEmergencies, daysCut: quota.daysCut, autoHalfDays: mm.converted, undecided: undecided },
       bank: { minutes: mm.run.bankMinutes, used: mm.run.bankUsed, left: mm.run.bankLeft, beyond: mm.run.beyondBankMinutes,
         passesUsed: mm.run.passesUsed, passes: Minutes.DEFAULTS.freePasses,
         days: mm.events.map(function (m, i) { var l = mm.run.lines[i]; return { date: m.date, kind: m.kind, minutes: m.minutes, counted: l.counted, fromBank: l.fromBank, informed: m.informed, notes: l.notes || [] }; }) },
@@ -1680,21 +1924,26 @@
       var made = [];
       ctx.db.rows('People').forEach(function (p) {
         if (p.active === false || p.role !== 'staff' || Cal.isRosterOff(p, date)) return;
+        if (!H.dayOver(ctx, p, date)) return; // never before that person's duty end (a job run by hand in the morning marks nobody)
         if (punchesToday(ctx, p.id, date, 'in').length) return;
-        var has = ctx.db.rows('LeaveRequests').some(function (r) { return r.personId === p.id && r.dates.indexOf(date) !== -1 && r.status !== 'Cancelled' && r.status.indexOf('Rejected') !== 0; });
-        if (has) return;
-        var row = { id: ctx.env.randomId(), personId: p.id, kind: 'full', dates: [date], halfStart: '', reasonCode: '', reasonText: '', submittedAt: ctx.now,
-          type: 'Unannounced', noticeHours: 0, run: 1, route: 'system', status: p.noApproval ? 'Recorded' : 'Absent – unannounced', approvals: {},
-          extremeEmergency: false, emergencyNo: 0, penaltyEmergency: false, restrictionViolation: false, enteredBy: 'system', decidedAt: ctx.now,
-          decidedBy: 'system', decisionReason: '', history: [{ at: ctx.now, by: 'system', action: 'absent-no-request' }] };
-        ctx.db.insert('LeaveRequests', row);
-        if (!p.noApproval) {
-          ctx.db.insert('Violations', { id: ctx.env.randomId(), personId: p.id, date: date, rule: 'absent-no-request', source: 'auto', proof: row.id, note: '',
-            createdBy: 'system', createdAt: ctx.now, disputeState: '', disputeAt: '', disputeText: '', disputeDecidedBy: '', disputeDecidedAt: '' });
-          H.notify(ctx, p.id, 'violation', 'Absent – unannounced', 'No request and no check-in on ' + niceDay(date) + '.', row.id);
+        var rows = ctx.db.rows('LeaveRequests').filter(function (r) { return r.personId === p.id && r.dates.indexOf(date) !== -1; });
+        var held = rows.filter(function (r) { return H.GRANTED[r.status] || r.status === H.ABSENT; });
+        if (held.some(function (r) { return r.kind === 'full'; })) return;
+        if (held.length) {
+          // An approved half day, and the person did not come for the other half either.
+          if (held.length < 2) { H.markAbsent(ctx, p, date, 'half', 'Approved half day, but no check-in for the other half'); made.push(p.name); }
+          return;
         }
-        H.byRole(ctx, 'owner').concat(H.byRole(ctx, 'manager')).forEach(function (m) { H.notify(ctx, m.id, 'absent', 'Absent – unannounced: ' + p.name, niceDay(date), row.id); });
-        H.audit(ctx, 'system', 'absent.auto', row.id);
+        var open = rows.filter(function (r) { return H.OPEN[r.status]; })[0];
+        if (open) {
+          // Asked, nobody decided, and the person stayed away: counted as a day away; the bosses must still decide.
+          var told = ctx.db.rows('Notifications').some(function (n) { return n.kind === 'undecided' && n.ref === open.id + ':' + date; });
+          if (!told) H.byRole(ctx, 'owner').concat(H.byRole(ctx, 'manager')).forEach(function (m) {
+            H.notify(ctx, m.id, 'undecided', 'Not decided: ' + p.name + ' was away today', 'The leave request for ' + niceDay(date) + ' is still waiting. Approve or reject it.', open.id + ':' + date);
+          });
+          return;
+        }
+        H.markAbsent(ctx, p, date, 'full');
         made.push(p.name);
       });
       return made;
@@ -1707,7 +1956,7 @@
       boss(actor);
       if (!String(reason || '').trim()) H.fail('REASON', 'A reason is required.');
       var r = H.find(ctx, 'LeaveRequests', leaveId);
-      if (!r || r.status !== 'Absent – unannounced') H.fail('NOT_FOUND', 'Not an unannounced absence.');
+      if (!r || r.status !== H.ABSENT) H.fail('NOT_FOUND', 'Not an unannounced absence.');
       ctx.db.update('LeaveRequests', leaveId, { status: 'Approved', decisionReason: 'Humanitarian – excused: ' + reason, decidedBy: actor.id, decidedAt: ctx.now,
         history: r.history.concat([{ at: ctx.now, by: actor.id, action: 'excused', reason: reason }]) });
       ctx.db.rows('Violations').forEach(function (v) {
@@ -1719,7 +1968,7 @@
   }
 
   var api = { requestShort: requestShort, decideShort: decideShort, checkIn: checkIn, checkOut: checkOut, goingOut: goingOut, decideOuting: decideOuting,
-    imBack: imBack, confirmBack: confirmBack, decideDress: decideDress, manualCheckIn: manualCheckIn, effectOf: effectOf, hints: hints, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
+    imBack: imBack, confirmBack: confirmBack, manualCheckOut: manualCheckOut, expectedDay: expectedDay, uncovered: uncovered, decideDress: decideDress, manualCheckIn: manualCheckIn, effectOf: effectOf, hints: hints, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
     syncViolations: syncViolations };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJAttendance = api;
@@ -1783,7 +2032,15 @@
       if (!String(a.note || '').trim() && !a.photoId) H.fail('REASON', 'Add a photo or a note.');
       if (a.item === 'dress' && person.dressExempt) H.fail('BLOCKED', person.name + ' is exempt from the dress check.');
       var date = a.date || H.today(ctx);
+      if (!Cal.isDate(date)) H.fail('BLOCKED', 'Pick the date.');
       if (date > H.today(ctx)) H.fail('BLOCKED', 'The date cannot be in the future.');
+      if (a.item === 'dress' && Cal.weekday(date) === 0) H.fail('BLOCKED', 'The dress code is Monday to Saturday. Sunday is casual.');
+      // The same entry sent twice (a retry after a slow reply) is one incident, not two.
+      var twin = ctx.db.rows('Incidents').filter(function (i) {
+        return i.personId === a.personId && i.item === a.item && i.date === date && i.createdBy === actor.id && i.note === String(a.note || '').trim() &&
+          (i.photoId || '') === (a.photoId || '') && Math.abs(ctx.now - i.createdAt) < 30000;
+      })[0];
+      if (twin) return { id: twin.id, result: twin.result, count: twin.countInPeriod, grace: twin.grace, repeated: true };
       var pk = periodKey(date, row.per);
       var count = 1 + ctx.db.rows('Incidents').filter(function (i) { return i.personId === a.personId && i.item === a.item && periodKey(i.date, row.per) === pk && i.result !== 'cancelled'; }).length;
       var isViolation = count > row.grace && !person.noApproval; // Muskan: recorded only, never a violation
@@ -1847,7 +2104,7 @@
       var ev = H.evaluate(ctx, person, input, id);
       if (ev.decision === 'blocked') H.fail('BLOCKED', ev.reasons.join(' '));
       // Violations that came from the old version are withdrawn; the new version earns its own.
-      ctx.db.rows('Violations').forEach(function (v) { if (v.proof === id && v.disputeState !== 'removed') ctx.db.update('Violations', v.id, { disputeState: 'removed', note: 'Request edited' }); });
+      H.withdrawViolations(ctx, id, 'Request edited');
       var patch = { kind: input.kind, dates: ev.dates, halfStart: input.halfStart || '', reasonCode: input.reasonCode, reasonText: String(input.reasonText).trim(),
         submittedAt: ctx.now, type: ev.type, noticeHours: ev.noticeHours, run: ev.run, route: ev.decision, status: H.STATUS_FOR[ev.decision],
         approvals: ev.decision === 'special' ? { aakash: '', varun: '' } : {}, extremeEmergency: !!input.extremeEmergency, emergencyNo: ev.emergencyNo,
@@ -1874,7 +2131,8 @@
       var person = H.find(ctx, 'People', input.forPersonId);
       if (!person) H.fail('NOT_FOUND', 'No such person.');
       var dates = (input.dates || []).slice().sort();
-      if (!dates.length || !/^(full|half)$/.test(input.kind)) H.fail('BLOCKED', 'Pick exact dates.');
+      if (!dates.length || !/^(full|half)$/.test(input.kind) || !dates.every(Cal.isDate)) H.fail('BLOCKED', 'Pick exact dates.');
+      if (input.kind === 'half' && (dates.length !== 1 || !Cal.isTime(input.halfStart))) H.fail('BLOCKED', 'A half day is one date with a start time.');
       var clashOverlap = H.liveLeaves(ctx, person.id).some(function (r) { return r.dates.some(function (d) { return dates.indexOf(d) !== -1; }); });
       if (clashOverlap) H.fail('BLOCKED', 'This person already has a request on one of these dates.');
       var row = { id: ctx.env.randomId(), personId: person.id, kind: input.kind, dates: dates, halfStart: input.halfStart || '', reasonCode: input.reasonCode || 'Other',
@@ -1900,6 +2158,17 @@
     var s = p.sundayOff;
     if (!(s === 'every' || (Array.isArray(s) && s.every(function (n) { return n >= 1 && n <= 5; })))) H.fail('BLOCKED', 'Sunday roster is not valid.');
   }
+  /** Rules and restrictions hold names. When a name is corrected, they follow, so no rule silently loses a member. */
+  function renameEverywhere(ctx, actor, from, to) {
+    var swap = function (list) { return Array.isArray(list) ? list.map(function (n) { return n === from ? to : n; }) : list; };
+    var has = function (list) { return Array.isArray(list) && list.indexOf(from) !== -1; };
+    if (!ctx.db.rows('Rules').length) H.rules(ctx).forEach(function (r) { ctx.db.insert('Rules', r); });
+    ctx.db.rows('Rules').forEach(function (r) {
+      if (has(r.members) || has(r.emergencyIfAllPresent)) ctx.db.update('Rules', r.id, { members: swap(r.members), emergencyIfAllPresent: swap(r.emergencyIfAllPresent) });
+    });
+    ctx.db.rows('Restrictions').forEach(function (r) { if (has(r.appliesTo)) ctx.db.update('Restrictions', r.id, { appliesTo: swap(r.appliesTo) }); });
+    H.audit(ctx, actor.id, 'people.rename', from, { to: to });
+  }
   function savePerson(ctx, actor, p) {
     return ctx.env.withLock(function () {
       owner(actor);
@@ -1910,7 +2179,9 @@
       var sameName = ctx.db.rows('People').some(function (x) { return x.name === clean.name && x.id !== p.id && x.active !== false; });
       if (sameName) H.fail('BLOCKED', 'Another active person already has this name.');
       if (existing) {
-        if (existing.role === 'owner' && clean.role !== 'owner' && ctx.db.rows('People').filter(function (x) { return x.role === 'owner' && x.active !== false; }).length < 2) H.fail('BLOCKED', 'There must always be one owner.');
+        var losesOwner = existing.role === 'owner' && existing.active !== false && (clean.role !== 'owner' || clean.active === false);
+        if (losesOwner && ctx.db.rows('People').filter(function (x) { return x.role === 'owner' && x.active !== false; }).length < 2) H.fail('BLOCKED', 'There must always be one active owner.');
+        if (existing.name !== clean.name) renameEverywhere(ctx, actor, existing.name, clean.name);
         var before = {}; PERSON_FIELDS.forEach(function (f) { before[f] = existing[f]; });
         ctx.db.update('People', p.id, clean);
         H.audit(ctx, actor.id, 'people.update', p.id, { before: before, after: clean });
@@ -1958,11 +2229,18 @@
   function saveRestriction(ctx, actor, r) {
     return ctx.env.withLock(function () {
       boss(actor);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(r.from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(r.to || '') || r.to < r.from) H.fail('BLOCKED', 'Pick a valid date range.');
+      if (!Cal.isDate(r.from) || !Cal.isDate(r.to) || r.to < r.from) H.fail('BLOCKED', 'Pick a valid date range.');
+      var old = r.id && H.find(ctx, 'Restrictions', r.id);
+      if (r.id && !old) H.fail('NOT_FOUND', 'No such restriction.');
+      // Aakash can add a restriction, and change one he added himself. Changing or switching off
+      // any other one lifts a hard rule, and only Varun can do that.
+      if (old && actor.role !== 'owner' && old.createdBy !== actor.id) H.fail('FORBIDDEN', 'Only Varun can change or switch off this restriction.');
+      var known = ctx.db.rows('People').map(function (p) { return p.name; });
+      if (Array.isArray(r.appliesTo) && !r.appliesTo.every(function (n) { return known.indexOf(n) !== -1; })) H.fail('BLOCKED', 'Choose people from the list.');
       need(r.note, 'Write a note, for example "Peak sales season".');
       if (r.rule !== 'no-leave' && r.rule !== 'violation') H.fail('BLOCKED', 'Choose the rule.');
       var clean = { from: r.from, to: r.to, note: String(r.note).trim(), rule: r.rule, appliesTo: Array.isArray(r.appliesTo) && r.appliesTo.length ? r.appliesTo : null, on: r.on !== false };
-      if (r.id && H.find(ctx, 'Restrictions', r.id)) { ctx.db.update('Restrictions', r.id, clean); H.audit(ctx, actor.id, 'restrictions.update', r.id, clean); return { id: r.id }; }
+      if (old) { ctx.db.update('Restrictions', r.id, clean); H.audit(ctx, actor.id, 'restrictions.update', r.id, clean); return { id: r.id }; }
       var id = 'R' + ctx.env.randomId().slice(0, 6);
       ctx.db.insert('Restrictions', Object.assign({ id: id, createdBy: actor.id, createdAt: ctx.now }, clean));
       H.audit(ctx, actor.id, 'restrictions.create', id, clean);
@@ -1973,7 +2251,9 @@
   function setSetting(ctx, actor, key, value) {
     return ctx.env.withLock(function () {
       owner(actor);
-      if (!SETTING_KEYS[key]) H.fail('BLOCKED', 'Unknown setting.');
+      if (!Object.prototype.hasOwnProperty.call(SETTING_KEYS, key)) H.fail('BLOCKED', 'Unknown setting.');
+      if (key === 'closedDays' && !(Array.isArray(value) && value.length <= 400 && value.every(Cal.isDate))) H.fail('BLOCKED', 'Closed days must be a list of dates.');
+      if (key === 'reminderHours' && !(Number(value) >= 1 && Number(value) <= 48)) H.fail('BLOCKED', 'Reminder hours must be between 1 and 48.');
       putSetting(ctx, actor, key, value);
       return { ok: true };
     });
@@ -1983,7 +2263,9 @@
   function setShopPoint(ctx, actor, samples) {
     return ctx.env.withLock(function () {
       boss(actor);
-      var good = (samples || []).filter(function (s) { return isFinite(s.lat) && isFinite(s.lng) && Math.abs(s.lat) <= 90 && Math.abs(s.lng) <= 180; });
+      // The first time, Aakash or Varun sets it standing in the shop. Once set, only Varun can move it.
+      if (setting(ctx, 'shopPoint') && actor.role !== 'owner') H.fail('FORBIDDEN', 'The shop location is already set. Only Varun can change it.');
+      var good = (Array.isArray(samples) ? samples.slice(0, 60) : []).filter(function (s) { return s && typeof s.lat === 'number' && typeof s.lng === 'number' && isFinite(s.lat) && isFinite(s.lng) && Math.abs(s.lat) <= 90 && Math.abs(s.lng) <= 180; });
       if (good.length < 3) H.fail('BLOCKED', 'Not enough location readings. Stand inside the shop and try again.');
       var lat = good.reduce(function (t, s) { return t + +s.lat; }, 0) / good.length, lng = good.reduce(function (t, s) { return t + +s.lng; }, 0) / good.length;
       putSetting(ctx, actor, 'shopPoint', { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6, samples: good.length });
@@ -2037,11 +2319,11 @@
       var pin = punches.filter(function (x) { return x.kind === 'in'; })[0], pout = punches.filter(function (x) { return x.kind === 'out'; })[0];
       var leave = ctx.db.rows('LeaveRequests').filter(function (r) { return r.personId === p.id && (r.status === 'Approved' || r.status === 'Recorded') && r.dates.indexOf(date) !== -1; })[0];
       var outing = ctx.db.rows('Outings').filter(function (o) { return o.personId === p.id && o.date === date && o.status === 'Approved'; })[0];
-      var start = hhmmToMin(p.dutyStart);
+      var day = Att.expectedDay(ctx, p, date), start = day.start;
       var state = Cal.isRosterOff(p, date) ? 'Roster off' : leave && leave.kind === 'full' ? 'On leave' : pout ? 'Checked out' : outing ? 'Out right now'
         : pin ? 'In' : now > start + 10 ? 'Not in yet – late' : 'Not in yet';
-      return { id: p.id, name: p.name, group: p.group, state: state, dutyStart: p.dutyStart, checkInAt: pin ? pin.at : '', checkOutAt: pout ? pout.at : '',
-        lateMinutes: pin ? Math.max(0, istMin(pin.at) - start) : (state.indexOf('late') !== -1 ? now - start : 0), photoId: pin ? pin.photoId : '', flag: pin ? pin.flag : '',
+      return { id: p.id, name: p.name, group: p.group, state: state, dutyStart: p.dutyStart, dueAt: start, checkInAt: pin ? pin.at : '', checkOutAt: pout ? pout.at : '',
+        lateMinutes: pin ? Att.uncovered(start, istMin(pin.at), day.win) : (state.indexOf('late') !== -1 ? now - start : 0), photoId: pin ? pin.photoId : '', flag: pin ? pin.flag : '',
         halfDay: leave && leave.kind === 'half' ? leave.halfStart : '', outSince: outing ? outing.approvedAt : '' };
     }) };
   }
@@ -2172,17 +2454,24 @@
     var people = {}; ctx.db.rows('People').forEach(function (p) { people[p.id] = p; });
     var groups = {};
     ctx.db.rows('Notifications').forEach(function (n) { if (!n.emailedAt) (groups[n.to] = groups[n.to] || []).push(n); });
-    var sent = 0;
+    var sent = 0, marks = [];
     Object.keys(groups).forEach(function (to) {
       var p = people[to], list = groups[to];
       var email = p && (p.email || (p.role === 'owner' ? ctx.env.ownerEmail : ''));
-      if (!email) { list.forEach(function (n) { ctx.db.update('Notifications', n.id, { emailedAt: -1 }); }); return; } // -1 = no address, in-app only
-      if (mailer.quota() < 1) return; // out of quota today: try again on the next run
+      if (!email) { list.forEach(function (n) { marks.push([n.id, -1]); }); return; } // -1 = no address, in-app only
+      var left = 0; try { left = mailer.quota(); } catch (e) { left = 0; }
+      if (left < 1) return; // out of quota today: try again on the next run
       var subject = list.length === 1 ? 'GJ Leave: ' + list[0].title : 'GJ Leave: ' + list.length + ' updates';
-      var body = list.map(function (n) { return '• ' + n.title + (n.body ? '\n  ' + n.body : ''); }).join('\n\n') + '\n\nOpen the app to act on these.';
-      mailer.send(email, subject, body);
-      list.forEach(function (n) { ctx.db.update('Notifications', n.id, { emailedAt: ctx.now }); });
+      var body = list.map(function (n) { return '\u2022 ' + n.title + (n.body ? '\n  ' + n.body : ''); }).join('\n\n') + '\n\nOpen the app to act on these.';
+      try { mailer.send(email, subject, body); }
+      catch (e) { list.forEach(function (n) { marks.push([n.id, -2]); }); return; } // -2 = the address was refused: in-app only, never retried for these
+      list.forEach(function (n) { marks.push([n.id, ctx.now]); });
       sent += 1;
+    });
+    // The marks are written together, on fresh rows, inside the server lock.
+    ctx.env.withLock(function () {
+      if (ctx.db.reset) ctx.db.reset();
+      marks.forEach(function (m) { ctx.db.update('Notifications', m[0], { emailedAt: m[1] }); });
     });
     return sent;
   }
@@ -2265,9 +2554,9 @@
 
   function run(ctx, job, mailer) {
     if (job === 'emails') return sendEmails(ctx, mailer);
-    if (job === 'hourly') return ctx.env.withLock(function () { return { reminders: reminders(ctx), warnings: warnings(ctx) }; });
-    if (job === 'evening') return ctx.env.withLock(function () { return eveningBefore(ctx); });
-    if (job === 'endOfDay') return endOfDay(ctx);
+    if (job === 'hourly') return ctx.env.withLock(function () { if (ctx.db.reset) ctx.db.reset(); return { reminders: reminders(ctx), warnings: warnings(ctx) }; });
+    if (job === 'evening') return ctx.env.withLock(function () { if (ctx.db.reset) ctx.db.reset(); return eveningBefore(ctx); });
+    if (job === 'endOfDay') return ctx.env.withLock(function () { if (ctx.db.reset) ctx.db.reset(); return endOfDay(ctx); });
     throw new Error('Unknown job ' + job);
   }
 
@@ -2349,16 +2638,10 @@
     },
     decideShort: function (ctx, actor, a) { return Att.decideShort(ctx, actor, a.id, !!a.approve, a.reason); },
     checkIn: function (ctx, actor, a) {
-      // The check-in photo is taken inside the app (back camera, landscape) and is required.
-      if (!a.photo || !a.thumb) throw err('BLOCKED', 'Take the check-in photo first.');
-      if (String(a.photo).length > 900000 || String(a.thumb).length > 45000) throw err('BLOCKED', 'The photo is too large. Please try again.');
-      if (ctx.db.rows('Punches').some(function (x) { return x.personId === actor.id && x.date === Core._.today(ctx) && x.kind === 'in'; })) throw err('BLOCKED', 'You have already checked in today.');
-      var stamp = Core._.today(ctx) + '_' + actor.id + '_' + ctx.now;
-      // Full photo: private Drive folder. Thumbnail: a small cell in the Thumbs tab (no second Drive file).
-      var thumbId = 't_' + ctx.env.randomId();
-      var args = { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, photoId: ctx.env.savePhoto(stamp + '.jpg', a.photo), thumbId: thumbId };
-      var result = Att.checkIn(ctx, actor, args);
-      ctx.db.insert('Thumbs', { id: thumbId, personId: actor.id, date: Core._.today(ctx), data: a.thumb });
+      // a = what PREPARE.checkIn made of the phone's request. Inside the server lock, on fresh data:
+      // a second copy of the same check-in (a retry, a second tab) is refused here.
+      var result = Att.checkIn(ctx, actor, { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, photoId: a.photoId, thumbId: a.thumbId });
+      ctx.db.insert('Thumbs', { id: a.thumbId, personId: actor.id, date: Core._.today(ctx), data: a.thumb });
       return result;
     },
     photo: function (ctx, actor, a) {
@@ -2375,6 +2658,7 @@
     },
     decideDress: function (ctx, actor, a) { return Att.decideDress(ctx, actor, a.id, !!a.confirm, Admin.recordIncident); },
     manualCheckIn: function (ctx, actor, a) { return Att.manualCheckIn(ctx, actor, a); },
+    manualCheckOut: function (ctx, actor, a) { return Att.manualCheckOut(ctx, actor, a); },
     checkOut: function (ctx, actor) { return Att.checkOut(ctx, actor); },
     goingOut: function (ctx, actor, a) { return Att.goingOut(ctx, actor, a); },
     decideOuting: function (ctx, actor, a) { return Att.decideOuting(ctx, actor, a.id, !!a.approve, a.reason); },
@@ -2407,6 +2691,10 @@
         absences: ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Absent \u2013 unannounced'; }).map(function (r) { return { id: r.id, name: names[r.personId], dates: r.dates }; }),
         outings: ctx.db.rows('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Back'; }).map(function (o) {
           return { id: o.id, name: names[o.personId], status: o.status, reason: o.reason, expectedMinutes: o.expectedMinutes, requestedAt: o.requestedAt, approvedAt: o.approvedAt, backAt: o.backAt, minutes: o.minutes };
+        }),
+        // Out right now: if the person never taps "I'm back", Aakash closes it with the real time.
+        outNow: ctx.db.rows('Outings').filter(function (o) { return o.status === 'Approved'; }).map(function (o) {
+          return { id: o.id, name: names[o.personId], date: o.date, reason: o.reason, expectedMinutes: o.expectedMinutes, approvedAt: o.approvedAt };
         }),
         shorts: ctx.db.rows('ShortRequests').filter(function (q) { return q.status === 'Pending'; })
           .map(function (q) { return { id: q.id, name: names[q.personId], kind: q.kind, date: q.date, time: q.time, submittedAt: q.submittedAt }; }),
@@ -2456,7 +2744,7 @@
     devices: function (ctx, actor) {
       if (actor.role !== 'owner') throw err('FORBIDDEN', 'Only the owner.');
       var names = nameMap(ctx);
-      return ctx.db.rows('Devices').map(function (d) { return { id: d.id, name: names[d.personId], label: d.label, status: d.status, requestedAt: d.requestedAt }; });
+      return ctx.db.rows('Devices').map(function (d) { return { id: d.id, name: names[d.personId], label: d.label, status: d.status, requestedAt: d.requestedAt, decidedAt: d.decidedAt }; });
     },
     decideDevice: function (ctx, actor, a) { return Core.decideDevice(ctx, actor, a.id, !!a.approve); },
     notifications: function (ctx, actor) {
@@ -2468,15 +2756,72 @@
   function nameMap(ctx) { var m = {}; ctx.db.rows('People').forEach(function (p) { m[p.id] = p.name; }); return m; }
   function err(code, message) { var e = new Error(message); e.code = code; return e; }
 
+  // Actions that only read. Everything else changes data and runs, from start to end, inside the server lock.
+  var READ_ONLY = { me: 1, previewLeave: 1, myLeaves: 1, pending: 1, effect: 1, photo: 1, myMonth: 1, today: 1, approvals: 1, incidentItems: 1,
+    disputes: 1, getSettings: 1, restrictions: 1, board: 1, todayAtGJ: 1, calendar: 1, myRestrictions: 1, monthReport: 1, devices: 1, notifications: 1 };
+  var JPEG = /^data:image\/jpeg;base64,[A-Za-z0-9+\/]+=*$/;
+  var TEXT_MAX = 2000, LIST_MAX = 400;
+
+  /** Slow work that must not hold the lock: the photo upload. Runs after sign-in is checked, before the lock. */
+  var PREPARE = {
+    checkIn: function (ctx, actor, a) {
+      // The check-in photo is taken inside the app (back camera, landscape) and is required.
+      if (!a.photo || !a.thumb) throw err('BLOCKED', 'Take the check-in photo first.');
+      if (typeof a.photo !== 'string' || typeof a.thumb !== 'string' || a.photo.length > 900000 || a.thumb.length > 45000) throw err('BLOCKED', 'The photo is too large. Please try again.');
+      // Only a picture made by the app is stored: never a link that other phones would then load.
+      if (!JPEG.test(a.thumb) || !JPEG.test(a.photo)) throw err('BLOCKED', 'The photo could not be read. Please take it again.');
+      if (ctx.db.rows('Punches').some(function (x) { return x.personId === actor.id && x.date === Core._.today(ctx) && x.kind === 'in'; })) throw err('BLOCKED', 'You have already checked in today.');
+      var stamp = Core._.today(ctx) + '_' + actor.id + '_' + ctx.now;
+      // Full photo: private Drive folder. Thumbnail: a small cell in the Thumbs tab (no second Drive file).
+      return { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, thumb: a.thumb, photoId: ctx.env.savePhoto(stamp + '.jpg', a.photo), thumbId: 't_' + ctx.env.randomId() };
+    }
+  };
+
+  function own(map, key) { return typeof key === 'string' && Object.prototype.hasOwnProperty.call(map, key); }
+
+  /** Sizes are enforced here, not only in the phone: no text beyond 2,000 characters, no endless lists. */
+  function checkSizes(v, key, depth) {
+    if (typeof v === 'string') {
+      var max = key === 'photo' ? 900000 : key === 'thumb' ? 45000 : TEXT_MAX;
+      if (v.length > max) throw err('BLOCKED', 'That text is too long.');
+    } else if (v && typeof v === 'object') {
+      if (depth > 5) throw err('BLOCKED', 'The request is not valid.');
+      var keys = Object.keys(v);
+      if (keys.length > LIST_MAX) throw err('BLOCKED', 'That list is too long.');
+      keys.forEach(function (k) { checkSizes(v[k], k, depth + 1); });
+    }
+  }
+
+  /**
+   * Run a changing action inside the server lock. Whatever was read while waiting for the lock is
+   * thrown away first, so every decision is made on what the Sheet holds NOW. If the action is
+   * refused half-way, nothing of it is saved (except a counted wrong PIN).
+   */
+  function locked(ctx, fn) {
+    return ctx.env.withLock(function () {
+      if (ctx.db.reset) ctx.db.reset();
+      try { return fn(); }
+      catch (e) { if (!(e && e.keep) && ctx.db.discard) ctx.db.discard(); throw e; }
+    });
+  }
+
   function handle(ctx, request) {
     try {
       request = request || {};
-      var args = request.args || {};
+      var args = request.args && typeof request.args === 'object' && !Array.isArray(request.args) ? request.args : {};
+      var action = request.action;
       if (!(request.clientVersion >= MIN_CLIENT_VERSION)) return { ok: false, code: 'UPDATE', message: 'Please update the app.' };
-      if (PUBLIC[request.action]) return { ok: true, data: PUBLIC[request.action](ctx, args) };
-      if (!PRIVATE[request.action]) return { ok: false, code: 'UNKNOWN', message: 'Unknown action.' };
+      if (!own(PUBLIC, action) && !own(PRIVATE, action)) return { ok: false, code: 'UNKNOWN', message: 'Unknown action.' };
+      checkSizes(args, '', 0);
+      if (action === 'names') return { ok: true, data: PUBLIC.names(ctx, args) };
+      if (own(PUBLIC, action)) return { ok: true, data: locked(ctx, function () { return PUBLIC[action](ctx, args); }) };
       var actor = Core.authenticate(ctx, request.personId, request.deviceToken);
-      return { ok: true, data: PRIVATE[request.action](ctx, actor, args) };
+      if (own(READ_ONLY, action)) return { ok: true, data: PRIVATE[action](ctx, actor, args) };
+      if (own(PREPARE, action)) args = PREPARE[action](ctx, actor, args);
+      return { ok: true, data: locked(ctx, function () {
+        var fresh = Core.authenticate(ctx, request.personId, request.deviceToken); // the phone may have been removed meanwhile
+        return PRIVATE[action](ctx, fresh, args);
+      }) };
     } catch (e) {
       if (e && e.code) return { ok: false, code: e.code, message: e.message };
       return { ok: false, code: 'ERROR', message: 'Something went wrong. Please try again.' };

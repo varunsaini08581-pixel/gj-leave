@@ -25,9 +25,9 @@
   // ---------- menu on the More tab ----------
   window.GJMenu = function () {
     var role = state.me.role, items = [['Today at GJ', 'gj'], ['Notifications', 'notes']];
-    if (role !== 'staff') items = items.concat([['Record a violation / incident', 'incident'], ['Enter leave for a staff member', 'enter'], ['Enter a check-in (phone or camera problem)', 'manualin'], ['Calendar', 'calendar'],
+    if (role !== 'staff') items = items.concat([['Record a violation / incident', 'incident'], ['Enter leave for a staff member', 'enter'], ['Enter a check-in (phone or camera problem)', 'manualin'], ['Enter a forgotten check-out', 'manualout'], ['Calendar', 'calendar'],
       ['Month report', 'report'], ['Restrictions (blackout dates)', 'restrictions'], ['Set shop location', 'shop']]);
-    if (role === 'owner') items = items.concat([['Disputes', 'disputes'], ['Override a rule (leave)', 'override'], ['People, duty times and pay', 'people'], ['Clash rules', 'rules'], ['Grace table', 'grace']]);
+    if (role === 'owner') items = items.concat([['Disputes', 'disputes'], ['Override a rule (leave)', 'override'], ['People, duty times and pay', 'people'], ['Phones', 'phones'], ['Clash rules', 'rules'], ['Grace table', 'grace']]);
     return h('div', { class: 'card' }, [h('h2', {}, 'Menu'), h('ul', { class: 'list' }, items.map(function (it) {
       return h('li', {}, button(it[0], 'small', function () { open(it[1]); }));
     }))]);
@@ -95,6 +95,30 @@
     }).catch(function () {});
   };
 
+  V.manualout = function () {
+    run(api('incidentItems')).then(function (d) {
+      var who = h('select', {}, d.people.map(function (p) { return h('option', { value: p.id }, p.name); })), date = h('input', { type: 'date', value: A.todayStr(), max: A.todayStr() }),
+        time = h('input', { type: 'time' }), why = h('input', { placeholder: 'Why is it entered by hand?', maxlength: 120 }), out = h('div', {});
+      show([back(), h('h1', {}, 'Enter a forgotten check-out'), h('p', { class: 'sub' }, 'When someone left without checking out. It is labelled "entered by ' + state.me.name + '".'),
+        h('div', { class: 'card' }, [field('Staff member', who), field('Date', date), field('Time the person left', time), field('Reason', why), h('div', { class: 'btns' }, button('Save check-out', 'primary', function () {
+          return run(api('manualCheckOut', { personId: who.value, date: date.value, time: time.value, reason: why.value })).then(function (r) { out.replaceChildren(h('div', { class: 'result green' }, 'Saved. ' + (r.earlyMinutes > 0 ? r.earlyMinutes + ' min before duty end.' : 'After duty end.'))); });
+        })), out])]);
+    }).catch(function () {});
+  };
+
+  // ---------- phones (owner) ----------
+  V.phones = function () {
+    run(api('devices')).then(function (list) {
+      var live = list.filter(function (d) { return d.status === 'approved' || d.status === 'pending'; });
+      show([back(), h('h1', {}, 'Phones'), h('p', { class: 'sub' }, 'One approved phone per person. Remove a phone when it is lost, sold or the person has left. A removed phone can never sign in again.'),
+        h('div', { class: 'card' }, live.length ? h('ul', { class: 'list' }, live.map(function (d) {
+          return h('li', {}, [h('div', { class: 'row' }, [h('strong', {}, d.name), h('span', { class: 'chip ' + (d.status === 'approved' ? 'green' : 'amber') }, d.status === 'approved' ? 'Approved' : 'Waiting')]),
+            h('div', { class: 'muted' }, (d.label || 'Phone') + ' · asked ' + A.niceDate(new Date(d.requestedAt + 19800000).toISOString().slice(0, 10))),
+            d.status === 'approved' ? h('div', { class: 'btns' }, button('Remove this phone', 'danger', function () { return run(api('decideDevice', { id: d.id, approve: false }), 'Phone removed.').then(V.phones); })) : null]);
+        })) : h('p', { class: 'muted' }, 'No phones yet.'))]);
+    }).catch(function () {});
+  };
+
   // ---------- leave form for someone else (Aakash entry, or Varun override) ----------
   function leaveFor(title, sub, action, extra) {
     run(api('incidentItems')).then(function (d) {
@@ -103,12 +127,13 @@
       var from = h('input', { type: 'date', value: A.todayStr() }), to = h('input', { type: 'date', value: A.todayStr() });
       var kind = h('select', {}, [h('option', { value: 'full' }, 'Full day(s)'), h('option', { value: 'half' }, 'Half day')]), half = h('input', { type: 'time', value: '09:30' });
       var reason = h('select', {}, state.me.reasons.map(function (r) { return h('option', { value: r }, r); })), text = h('textarea', { placeholder: 'Reason, for example "Called – emergency"', maxlength: 200 });
+      var called = extra ? null : h('input', { type: 'time' });
       var over = extra ? h('textarea', { placeholder: 'Why are you overriding the rule? (required, shown in the month report)', maxlength: 300 }) : null, out = h('div', {});
       function dates() { var a = []; for (var x = from.value; x && x <= (kind.value === 'half' ? from.value : to.value) && a.length < 62; x = A.addDays(x, 1)) a.push(x); return a; }
       show([back(), h('h1', {}, title), h('p', { class: 'sub' }, sub), h('div', { class: 'card' }, [field('Staff member', who), field('Type', kind), field('First day', from), field('Last day', to),
-        field('Half day starts at', half), field('Reason', reason), text, over ? field('Override reason', over) : null,
+        field('Half day starts at', half), field('Reason', reason), text, called ? field('If the person phoned: time of the call (notice is counted from it)', called) : null, over ? field('Override reason', over) : null,
         h('div', { class: 'btns' }, button(extra ? 'Approve with override' : 'Enter request', 'primary', function () {
-          return run(api(action, { forPersonId: who.value, kind: kind.value, dates: dates(), halfStart: kind.value === 'half' ? half.value : '', reasonCode: reason.value, reasonText: text.value, overrideReason: over ? over.value : undefined }))
+          return run(api(action, { forPersonId: who.value, kind: kind.value, dates: dates(), halfStart: kind.value === 'half' ? half.value : '', reasonCode: reason.value, reasonText: text.value, calledAt: called && called.value ? called.value : undefined, overrideReason: over ? over.value : undefined }))
             .then(function (r) { out.replaceChildren(h('div', { class: 'result green' }, 'Saved: ' + r.status + '. Labelled "entered by ' + state.me.name + '".')); });
         })), out])]);
     }).catch(function () {});

@@ -12,8 +12,8 @@ const leave = (dates, extra) => ({ kind: 'full', dates, reasonCode: 'Personal wo
 const D = '2026-11-25';
 
 test('grace table: chai cup 2 a month are noted, the 3rd is a violation; job sheet has no grace', () => {
-  const s = seed(); const aakash = s.actor('Aakash'); const c = s.ctx(D, '12:00');
-  const inc = item => Admin.recordIncident(c, aakash, { personId: 'harsh', item, note: 'Seen on the counter' });
+  const s = seed(); const aakash = s.actor('Aakash'); const c = s.ctx(D, '12:00'); let n = 0;
+  const inc = item => Admin.recordIncident(c, aakash, { personId: 'harsh', item, note: 'Seen on the counter, time ' + (++n) });
   assert.deepEqual([inc('chai-cup').result, inc('chai-cup').result, inc('chai-cup').result], ['grace', 'grace', 'violation']);
   assert.equal(inc('job-sheet').result, 'violation');
   assert.deepEqual(s.db.rows('Violations').map(v => v.rule), ['manual:chai-cup', 'manual:job-sheet']);
@@ -114,7 +114,7 @@ test('settings: add a new joiner, change duty time, switch a rule off, change th
   const id = Admin.savePerson(c, varun, base).id;
   Admin.savePerson(c, varun, { ...base, id, dutyStart: '09:30', dutyEnd: '18:30' });
   assert.equal(s.db.rows('People').find(p => p.id === id).dutyStart, '09:30');
-  assert.match(code(() => Admin.savePerson(c, varun, { id: 'varun', name: 'Varun', group: 'Owner', role: 'staff', dutyStart: '10:00', dutyEnd: '19:00', sundayOff: [] })), /always be one owner/);
+  assert.match(code(() => Admin.savePerson(c, varun, { id: 'varun', name: 'Varun', group: 'Owner', role: 'staff', dutyStart: '10:00', dutyEnd: '19:00', sundayOff: [] })), /always be one active owner/);
 
   s.db.insert('Rules', { id: 'C2', on: true, label: 'Calls', members: ['Bhawna', 'Pooja'], minPresent: 1 });
   Core.submitLeave(s.ctx('2026-11-10', '10:00'), s.actor('Bhawna'), leave(['2026-11-18']));

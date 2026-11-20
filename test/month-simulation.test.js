@@ -70,7 +70,9 @@ test('12-person October 2026 matches the hand count', () => {
   lateOk('Bhawna', 14, '10:40'); Att.checkIn(at(14, '10:40'), A('Bhawna'));
 
   // --- Pooja: 2 days inside the restricted week (allowed, 1 violation for the whole request).
-  assert.equal(Core.submitLeave(at(15, '11:00'), A('Pooja'), leave([d(27), d(28)])).status, 'Approved');
+  const pr = Core.submitLeave(at(15, '11:00'), A('Pooja'), leave([d(27), d(28)]));
+  assert.equal(pr.status, 'Pending with Aakash'); // a restricted period is never auto-approved
+  assert.equal(Core.decideLeave(at(15, '11:30'), aakash, pr.id, true).status, 'Approved');
 
   // --- Anita: two weekdays (a 4-Sunday month gives her 1 free weekday). Aakash approves.
   approve([5, '11:00'], Core.submitLeave(at(5, '10:00'), A('Anita'), leave([d(14)])));

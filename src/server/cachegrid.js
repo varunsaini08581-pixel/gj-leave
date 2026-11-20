@@ -46,6 +46,8 @@
       return data;
     }
     return {
+      /** Forget the versions seen so far: the next read asks the cache which copy is current. */
+      reset: function () { versions = null; readAt = {}; },
       tabNames: function () { return grid.tabNames(); },
       addTab: function (name) { dirty[name] = true; return grid.addTab(name); },
       read: read,
