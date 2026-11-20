@@ -90,6 +90,7 @@ function gjEnv_() {
     randomId: function () { return Utilities.getUuid().replace(/-/g, ''); },
     savePhoto: function (name, data) { return gjTime_('drive', function () { return gjSavePhoto_(name, data); }); },
     readPhoto: function (id) { return gjReadPhoto_(id); },
+    removePhoto: function (id) { DriveApp.getFileById(id).setTrashed(true); },
     withLock: function (fn) {
       if (gjLockDepth_ > 0) return fn(); // already inside the lock in this run
       var lock = LockService.getScriptLock();
@@ -211,6 +212,20 @@ function gjPhotoFolder_() {
 function gjSavePhoto_(name, base64) {
   var blob = Utilities.newBlob(Utilities.base64Decode(String(base64).replace(/^data:image\/jpeg;base64,/, '')), 'image/jpeg', name);
   return gjPhotoFolder_().createFile(blob).getId(); // not shared with anyone
+}
+/**
+ * RECOVERY, run by hand from this editor only (the owner owns this script): the owner has lost his phone and
+ * the manager cannot help. All owner phones are removed; the next sign-in of the owner with his PIN is
+ * accepted as the first phone again.
+ */
+function resetOwnerPhones() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet(), people = ss.getSheetByName('People').getDataRange().getDisplayValues(), dev = ss.getSheetByName('Devices');
+  var pid = people[0].indexOf('id'), prole = people[0].indexOf('role'), owners = {};
+  for (var i = 1; i < people.length; i++) if (people[i][prole] === 'owner') owners[people[i][pid]] = 1;
+  var rows = dev.getDataRange().getDisplayValues(), cp = rows[0].indexOf('personId'), cs = rows[0].indexOf('status'), n = 0;
+  for (var r = 1; r < rows.length; r++) if (owners[rows[r][cp]] && (rows[r][cs] === 'approved' || rows[r][cs] === 'pending')) { dev.getRange(r + 1, cs + 1).setNumberFormat('@').setValue('revoked'); n += 1; }
+  CacheService.getScriptCache().put('v:Devices', Utilities.getUuid().slice(0, 8), 21600);
+  return n + ' owner phone(s) removed. Sign in with the owner PIN now.';
 }
 function gjReadPhoto_(id) {
   return 'data:image/jpeg;base64,' + Utilities.base64Encode(DriveApp.getFileById(id).getBlob().getBytes());

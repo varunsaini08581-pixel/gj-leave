@@ -52,6 +52,14 @@
     var p = H.find(ctx, 'People', personId);
     return !!p && !expectedDay(ctx, p, date).fullLeave && !Cal.isRosterOff(p, date) && !H.closedSet(ctx)[date];
   }
+  /** Was a leave for this day granted and then cancelled or shortened? Then the absence was known beforehand ("informed"). */
+  function hadLeave(ctx, personId, date) {
+    return ctx.db.rows('LeaveRequests').some(function (r) {
+      if (r.personId !== personId || r.route === 'system' || !r.decidedAt) return false;
+      if (r.status === 'Cancelled' && r.dates.indexOf(date) !== -1) return true;
+      return H.GRANTED[r.status] && (r.history || []).some(function (h) { return /^shortened/.test(h.action || '') && h.from && (h.from.dates || []).indexOf(date) !== -1; });
+    });
+  }
   function punchesToday(ctx, personId, date, kind) {
     return ctx.db.rows('Punches').filter(function (p) { return p.personId === personId && p.date === date && p.kind === kind; });
   }
@@ -170,9 +178,11 @@
       if (!located) { a.lat = ''; a.lng = ''; }               // anything that is not a real reading is "no location"
       if (!(typeof a.accuracy === 'number' && isFinite(a.accuracy) && a.accuracy >= 0)) a.accuracy = '';
       if (shop && located) {
-        var pt = JSON.parse(shop);
-        distance = distanceM(pt.lat, pt.lng, a.lat, a.lng);
-        if (distance > SHOP_RADIUS_M) flag.push('outside-shop-area');
+        var pt = null; try { pt = JSON.parse(shop); } catch (e) { pt = null; } // a cell damaged by hand must not stop every check-in
+        if (pt && typeof pt.lat === 'number' && typeof pt.lng === 'number') {
+          distance = distanceM(pt.lat, pt.lng, a.lat, a.lng);
+          if (distance > SHOP_RADIUS_M) flag.push('outside-shop-area');
+        } else flag.push('shop-location-not-set');
       } else if (shop) flag.push('no-location');
       if (day.fullLeave || Cal.isRosterOff(person, date) || H.closedSet(ctx)[date]) flag.push('off-day');
       var punch = { id: ctx.env.randomId(), personId: actor.id, date: date, kind: 'in', at: ctx.now, photoId: a.photoId || '',
@@ -193,7 +203,7 @@
         // "Informed" only if it was applied before duty start AND Aakash approved it.
         // Still pending: counted as not informed for now, and corrected when Aakash decides.
         var inTime = !!q && q.submittedAt < Core.toMs(date, minToHhmm(day.start));
-        var informed = inTime && q.status === 'Approved';
+        var informed = (inTime && q.status === 'Approved') || hadLeave(ctx, actor.id, date);
         counted = addDayMinutes(ctx, actor.id, date, 'late', late, informed, inTime ? hhmmToMin(q.time) - day.start : undefined, punch.id,
           inTime && q.status === 'Pending' ? q.id : '');
         syncViolations(ctx, actor.id, Cal.monthKey(date));
@@ -270,15 +280,15 @@
       if (punchesToday(ctx, a.personId, date, 'in').length) H.fail('BLOCKED', 'Already checked in today.');
       var at = Core.toMs(date, a.time);
       if (at > ctx.now) H.fail('BLOCKED', 'The time cannot be in the future.');
-      var asThen = { db: ctx.db, env: ctx.env, now: at, stampNow: ctx.now };
-      var r = checkIn(asThen, { id: person.id, name: person.name, role: 'staff', deviceId: '' }, {});
-      ctx.db.update('Punches', r.id, { enteredBy: actor.id, note: 'Entered by ' + actor.name + ': ' + String(a.reason).trim(), flag: 'entered-by-manager' });
       // The person was at work: an absence the evening job has already recorded for that day is taken back.
       ctx.db.rows('LeaveRequests').forEach(function (x) {
         if (x.personId !== person.id || x.route !== 'system' || x.dates.indexOf(date) === -1 || x.status === 'Cancelled') return;
         ctx.db.update('LeaveRequests', x.id, { status: 'Cancelled', decisionReason: 'Check-in entered by ' + actor.name, decidedBy: actor.id, decidedAt: ctx.now,
           history: H.hist(x.history, [{ at: ctx.now, by: actor.id, action: 'absence taken back (check-in entered)' }]) });
       });
+      var asThen = { db: ctx.db, env: ctx.env, now: at, stampNow: ctx.now };
+      var r = checkIn(asThen, { id: person.id, name: person.name, role: 'staff', deviceId: '' }, {});
+      ctx.db.update('Punches', r.id, { enteredBy: actor.id, note: 'Entered by ' + actor.name + ': ' + String(a.reason).trim(), flag: 'entered-by-manager' });
       H.syncLeaveViolations(ctx, person.id);
       H.audit(ctx, actor.id, 'punch.manual', r.id, { personId: a.personId, time: a.time, reason: a.reason });
       return { id: r.id, lateMinutes: r.lateMinutes };
@@ -473,7 +483,9 @@
    * the day as it stands now; nothing is deleted, a row that no longer counts is set to 0 with a note.
    */
   function recountDay(ctx, personId, date) {
-    var rows = ctx.db.rows('DayMinutes').filter(function (m) { return m.personId === personId && m.date === date && (m.kind === 'late' || m.kind === 'early') && m.minutes > 0; });
+    if (H.lockedMonths(ctx)[Cal.monthKey(date)]) return; // a locked month is never counted again
+    var all = ctx.db.rows('DayMinutes').filter(function (m) { return m.personId === personId && m.date === date; });
+    var rows = all.filter(function (m) { return (m.kind === 'late' || m.kind === 'early') && m.minutes > 0; });
     var person = H.find(ctx, 'People', personId);
     if (!person || !punchesToday(ctx, personId, date, 'in').length) return;
     var day = expectedDay(ctx, person, date), counts = dayCounts(ctx, personId, date);
@@ -481,20 +493,30 @@
     var cin = at('in'), cout = at('out');
     var left = { late: !counts || cin === null ? 0 : Math.min(uncovered(day.start, cin, day.win), uncovered(day.start, day.end, day.win)), early: !counts || cout === null ? 0 : uncovered(cout, day.end, day.win) };
     if (left.late <= Minutes.DEFAULTS.lateGraceMinutes) left.late = 0;
-    var touched = false;
+    var touched = false, SET_ASIDE = 'Counted again after the leave for this day was granted';
     rows.forEach(function (m) {
       var now = Math.min(m.minutes, left[m.kind]); left[m.kind] -= now;
-      if (now !== m.minutes) { ctx.db.update('DayMinutes', m.id, { minutes: now, note: 'Counted again after the leave for this day was granted' }); touched = true; }
+      if (now !== m.minutes) { ctx.db.update('DayMinutes', m.id, { minutes: now, note: SET_ASIDE }); touched = true; }
     });
-    // Time that was not booked at the tap because a leave covered the day then (the leave was cancelled or
-    // rejected afterwards): it is booked now. The absence was known beforehand, so it is "informed".
     ['late', 'early'].forEach(function (kind) {
-      if (left[kind] > 0 && !rows.some(function (m) { return m.kind === kind; })) {
+      if (!(left[kind] > 0)) return;
+      // Minutes that were set aside when a leave was granted for the day come back as they were (informed or not).
+      var aside = all.filter(function (m) { return m.kind === kind && !(m.minutes > 0) && m.note === SET_ASIDE; })[0];
+      if (aside) { ctx.db.update('DayMinutes', aside.id, { minutes: left[kind], note: 'Counted again after the leave for this day was cancelled' }); touched = true; return; }
+      // Time that was never booked because a leave covered the day at the tap: booked now. The absence was known, so it is "informed".
+      if (!rows.some(function (m) { return m.kind === kind; })) {
         var p = punchesToday(ctx, personId, date, kind === 'late' ? 'in' : 'out')[0];
         var made = addDayMinutes(ctx, personId, date, kind, left[kind], true, undefined, p ? p.id : '');
         ctx.db.update('DayMinutes', made.id, { note: 'Counted after the leave for this day was cancelled' });
         touched = true;
       }
+    });
+    // Going out: counted on a working day only. The day became a leave day: set aside. It is a working day again: counted.
+    ctx.db.rows('Outings').forEach(function (o) {
+      if (o.personId !== personId || o.date !== date || !(o.status === 'Back' || o.status === 'Confirmed') || !(o.minutes > 0)) return;
+      var row = all.filter(function (m) { return m.kind === 'out' && m.source === o.id; })[0], want = counts ? o.minutes : 0;
+      if (row && row.minutes !== want) { ctx.db.update('DayMinutes', row.id, { minutes: want, note: want ? 'Counted again: a working day' : 'Not counted: leave day' }); touched = true; }
+      else if (!row && want > 0) { var add = addDayMinutes(ctx, personId, date, 'out', want, true, undefined, o.id); ctx.db.update('DayMinutes', add.id, { note: 'Counted after the leave for this day was cancelled' }); touched = true; }
     });
     if (touched) syncViolations(ctx, personId, Cal.monthKey(date));
   }
@@ -536,6 +558,7 @@
   function syncViolations(ctx, personId, monthKey) {
     var who = H.find(ctx, 'People', personId);
     if (who && who.noApproval) return; // records only (intern): never a violation
+    if (H.lockedMonths(ctx)[monthKey]) return; // a locked month is never counted again
     var mm = monthMinutes(ctx, personId, monthKey);
     var wanted = {}, perEvent = {};
     mm.run.violations.forEach(function (v) {
@@ -560,7 +583,7 @@
     });
     existing.forEach(function (v) {
       if (wanted[v.proof]) {
-        if (v.disputeState === 'removed' && /^Recalculated/.test(v.note || '')) ctx.db.update('Violations', v.id, { disputeState: '', note: 'Applies again after a correction' });
+        if (v.disputeState === 'removed' && /^Recalculated/.test(v.note || '')) { ctx.db.update('Violations', v.id, { disputeState: '', note: 'Applies again after a correction' }); H.notify(ctx, personId, 'violation', 'Violation applies again', H.ruleLabel(v.rule) + ' (' + H.niceDates([v.date]) + '). The change that had withdrawn it was undone.', v.id); }
         delete wanted[v.proof]; return;
       }
       if (v.disputeState !== 'removed') { ctx.db.update('Violations', v.id, { disputeState: 'removed', note: 'Recalculated after a correction' }); H.toldWithdrawn(ctx, v, 'Counted again after a correction or a later approval'); }
@@ -629,6 +652,8 @@
         while (mo < 1) { mo += 12; y -= 1; }
         var key = y + '-' + (mo < 10 ? '0' + mo : mo);
         var n = ctx.db.rows('Violations').filter(function (v) { return v.personId === personId && Cal.monthKey(v.date) === key && v.disputeState !== 'removed'; }).length;
+        var frozen = ctx.db.rows('MonthSheet').filter(function (s) { return s.month === key && s.personId === personId; })[0];
+        if (frozen && frozen.result && frozen.result.ladder) n = frozen.result.ladder.violations;
         return { month: key, violations: n, stage: Minutes.ladder(n).notice ? 'notice' : n >= 2 ? 'bonus and allowance' : n === 1 ? 'record only' : 'none' };
       }),
       violations: violations.map(function (v) { return { id: v.id, date: v.date, rule: v.rule, source: v.source, note: v.source === 'manual' ? v.note : '', disputeState: v.disputeState, createdAt: v.createdAt }; }),

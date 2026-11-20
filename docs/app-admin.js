@@ -220,7 +220,7 @@
           p.wouldBeDeducted && p.wouldBeDeducted.lines.length ? h('ul', { class: 'list' }, p.wouldBeDeducted.lines.map(function (l) { return h('li', { class: 'muted' }, l); })) : null,
           r.locked ? null : button('Open ' + p.name + '’s month', 'small', function () { A.go('month', { personId: p.personId, month: m, back: function () { open('report', m); } }); })]));
       });
-      if (r.overrides.length) cards.push(h('div', { class: 'card' }, [h('h2', {}, 'Overrides by Varun'), h('ul', { class: 'list' }, r.overrides.map(function (o) { return h('li', {}, o.personId + ': ' + o.dates.join(', ') + ' — ' + o.reason); }))]));
+      if (r.overrides.length) cards.push(h('div', { class: 'card' }, [h('h2', {}, 'Overrides by Varun'), h('ul', { class: 'list' }, r.overrides.map(function (o) { return h('li', {}, (o.name || o.personId) + ': ' + o.dates.join(', ') + ' — ' + o.reason); }))]));
       if (r.locked) {
         var who = h('select', {}, r.people.map(function (p) { return h('option', { value: p.personId }, p.name); })), note = h('textarea', { placeholder: 'Correction (a new logged entry; the locked result does not change)' });
         cards.push(h('div', { class: 'card' }, [h('h2', {}, 'Corrections'), r.corrections.length ? h('ul', { class: 'list' }, r.corrections.map(function (c) { return h('li', {}, c.name + ': ' + c.note + ' (' + c.by + ')'); })) : h('p', { class: 'muted' }, 'None.'),

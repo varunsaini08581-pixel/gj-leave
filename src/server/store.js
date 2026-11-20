@@ -218,6 +218,8 @@
           places.push({ tab: tab, at: at, cells: cells, row: r });
         });
       });
+      // Changed rows first, new rows (alerts, audit) last: if the Sheet fails in between, nobody is told about a change that was not saved.
+      places.forEach(function (p) { grid.writeRow(p.tab, p.at, p.cells); p.row.__row = p.at; });
       if (batch.length) {
         if (grid.appendMany) firstRows = grid.appendMany(batch) || {};
         else batch.forEach(function (b) {
@@ -225,7 +227,6 @@
           else { firstRows[b.tab] = null; b.rows.forEach(function (a) { grid.append(b.tab, a); }); }
         });
       }
-      places.forEach(function (p) { grid.writeRow(p.tab, p.at, p.cells); p.row.__row = p.at; });
       Object.keys(cache).forEach(function (tab) {
         var t = cache[tab];
         var changed = t.pending.length || t.dirty.length;

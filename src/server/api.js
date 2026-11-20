@@ -144,6 +144,7 @@
       var out = {
         leaves: ctx.db.rows('LeaveRequests').filter(function (r) {
           if (!/^(Pending|Special)/.test(r.status)) return false;
+          if (r.personId === actor.id) return false; // nobody decides his own request
           // A special request this approver has already said yes to waits for the other one, not for him.
           return !(r.route === 'special' && r.approvals[actor.role === 'owner' ? 'varun' : 'aakash'] === 'yes');
         }).map(function (r) { return Object.assign(leaveView(r, names, actor), { context: Views.pendingContext(ctx, r) }); }),
@@ -161,7 +162,9 @@
           .map(function (x) { return { id: x.id, name: names[x.personId], date: x.date, issues: Att.dressIssues(x.dress), belt: x.dress.belt, photoId: x.photoId }; }),
         devices: []
       };
-      if (actor.role === 'owner') out.devices = ctx.db.rows('Devices').filter(function (d) { return d.status === 'pending'; })
+      var ownerIds = {}; ctx.db.rows('People').forEach(function (p) { if (p.role === 'owner') ownerIds[p.id] = 1; });
+      // The manager sees only the owner's own new phone (he approves it when the owner has lost his phone).
+      if (actor.role !== 'staff') out.devices = ctx.db.rows('Devices').filter(function (d) { return d.status === 'pending' && (actor.role === 'owner' || ownerIds[d.personId]); })
         .map(function (d) { return { id: d.id, name: names[d.personId], label: d.label, requestedAt: d.requestedAt }; });
       return out;
     },
@@ -220,6 +223,7 @@
   var READ_ONLY = { me: 1, previewLeave: 1, myLeaves: 1, pending: 1, effect: 1, photo: 1, myMonth: 1, today: 1, approvals: 1, incidentItems: 1,
     disputes: 1, staffLeaves: 1, getSettings: 1, restrictions: 1, board: 1, todayAtGJ: 1, calendar: 1, myRestrictions: 1, monthReport: 1, devices: 1, notifications: 1 };
   var JPEG = /^data:image\/jpeg;base64,[A-Za-z0-9+\/]+=*$/;
+  var TEXT_ARGS = ['reason', 'note', 'text', 'reasonText', 'overrideReason', 'label', 'deviceLabel'];
   var TEXT_MAX = 2000, LIST_MAX = 400, TOTAL_MAX = 12000; // one request, without its photo, is never bigger than this
 
   /** Slow work that must not hold the lock: the photo upload. Runs after sign-in is checked, before the lock. */
@@ -274,6 +278,8 @@
       if (!(request.clientVersion >= MIN_CLIENT_VERSION)) return { ok: false, code: 'UPDATE', message: 'Please update the app.' };
       if (!own(PUBLIC, action) && !own(PRIVATE, action)) return { ok: false, code: 'UNKNOWN', message: 'Unknown action.' };
       checkSizes(args, '', 0);
+      // Free-text fields are text for everyone (a list or an object here would be stored and shown as "[object Object]").
+      for (var ti = 0; ti < TEXT_ARGS.length; ti++) { var tv = args[TEXT_ARGS[ti]]; if (tv !== undefined && tv !== null && typeof tv !== 'string') return { ok: false, code: 'BLOCKED', message: 'The request is not valid.' }; }
       // The pieces are limited one by one above; here the request as a whole (a text sent as a long list of texts must not slip through).
       var bulk = 0; try { bulk = JSON.stringify(args, function (k, v) { return k === 'photo' || k === 'thumb' ? '' : v; }).length; } catch (e) { bulk = TOTAL_MAX + 1; }
       if (bulk > TOTAL_MAX) return { ok: false, code: 'BLOCKED', message: 'That request is too large.' };
@@ -286,9 +292,11 @@
       var actor = Core.authenticate(ctx, request.personId, request.deviceToken);
       if (own(READ_ONLY, action)) return { ok: true, data: PRIVATE[action](ctx, actor, args) };
       if (own(PREPARE, action)) args = PREPARE[action](ctx, actor, args);
+      var photoId = own(PREPARE, action) && args ? args.photoId : '';
       return { ok: true, data: locked(ctx, function () {
         var fresh = Core.authenticate(ctx, request.personId, request.deviceToken); // the phone may have been removed meanwhile
-        return PRIVATE[action](ctx, fresh, args);
+        try { return PRIVATE[action](ctx, fresh, args); }
+        catch (e) { if (photoId && ctx.env.removePhoto) { try { ctx.env.removePhoto(photoId); } catch (x) { /* the file stays; nothing depends on it */ } } throw e; } // refused after the upload: the photo is not kept
       }) };
     } catch (e) {
       if (e && e.code) return { ok: false, code: e.code, message: e.message };

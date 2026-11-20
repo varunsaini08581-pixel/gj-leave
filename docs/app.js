@@ -35,7 +35,15 @@
       if (!f.getAttribute('aria-label') && f.getAttribute('placeholder')) f.setAttribute('aria-label', f.getAttribute('placeholder'));
     });
   }
-  function show(nodes) { state.loading = false; app.replaceChildren.apply(app, [].concat(nodes).filter(function (n) { return n != null && n !== false; })); tieLabels(); window.scrollTo(0, 0); }
+  function show(nodes) {
+    // A redraw that comes from the automatic refresh: dropped when the person has started to fill something in
+    // meanwhile, and the page stays where it was scrolled to.
+    var auto = state.auto === state.gen + 1; state.auto = 0;
+    state.loading = false;
+    if (auto && typing()) return;
+    var y = auto ? (window.scrollY || 0) : 0;
+    app.replaceChildren.apply(app, [].concat(nodes).filter(function (n) { return n != null && n !== false; })); tieLabels(); window.scrollTo(0, y);
+  }
   /** A screen that could not load: say so, and offer to try again (never an endless "Loading"). */
   function showLoadError(message) {
     var again = state.reload;
@@ -68,16 +76,24 @@
   // but the phone stays the approved phone (no new approval from the owner).
   function loadDevice() { try { return JSON.parse(localStorage.getItem(DEMO ? 'gjleave.demo.device' : 'gjleave.device')) || {}; } catch (e) { return {}; } }
   function saveDevice(d) { try { localStorage.setItem(DEMO ? 'gjleave.demo.device' : 'gjleave.device', JSON.stringify(d)); } catch (e) { /* stays in memory */ } }
+  function deviceTokens() {
+    var d = loadDevice(), all = d.tokens && typeof d.tokens === 'object' ? d.tokens : {};
+    if (d.personId && d.deviceToken && !all[d.personId]) all[d.personId] = d.deviceToken; // kept from the earlier one-slot form
+    return all;
+  }
+  function keepToken(personId, token) { if (!personId || !token) return; var all = deviceTokens(); all[personId] = token; saveDevice({ tokens: all }); }
   function knownToken(personId) {
-    var d = loadDevice();
-    if (d.personId === personId && d.deviceToken) return d.deviceToken;
+    var all = deviceTokens();
+    if (Object.prototype.hasOwnProperty.call(all, personId) && all[personId]) return all[personId];
     return state.session.personId === personId ? (state.session.deviceToken || null) : null;
   }
   function signOut() {
     // The server is told first: after this the phone's token opens nothing until the PIN is entered again.
-    var done = state.session.deviceToken ? api('signOut').catch(function () {}) : Promise.resolve();
-    if (state.session.deviceToken) saveDevice({ personId: state.session.personId, deviceToken: state.session.deviceToken });
-    return done.then(function () { saveSession({ personId: state.session.personId }); state.me = null; });
+    // No connection: the server could not be told, so the phone is NOT shown as signed out (its token would still open the account).
+    var done = state.session.deviceToken ? api('signOut') : Promise.resolve();
+    keepToken(state.session.personId, state.session.deviceToken);
+    return done.then(function () { saveSession({ personId: state.session.personId }); state.me = null; },
+      function (e) { if (e && e.code === 'AUTH') { saveSession({ personId: state.session.personId }); state.me = null; return; } toast('Not signed out: no connection. Try again when the phone is online.'); throw e; });
   }
   function saveSession(s) { state.session = s; try { localStorage.setItem(DEMO ? 'gjleave.demo' : 'gjleave.session', JSON.stringify(s)); } catch (e) { /* stays in memory */ } }
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -171,6 +187,7 @@
   // A form that holds anything the person entered is never redrawn under them, also after the keyboard was closed.
   function typing() {
     if (typeof document.querySelectorAll !== 'function') { var a = document.activeElement; return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || '') && (a.value || '') !== ''; }
+    if (document.querySelector('[data-changed]')) return true; // a switch that is not an input (late / early)
     var list = document.querySelectorAll('input, textarea, select');
     for (var i = 0; i < list.length; i++) {
       var el = list[i];
@@ -181,7 +198,7 @@
     }
     return false;
   }
-  function refresh() { if (state.me && !state.loading && !state.sub && (state.tab === 'home' || state.tab === 'approve') && !typing() && !state.camera) VIEWS[state.tab](); }
+  function refresh() { if (state.me && !state.loading && !state.sub && (state.tab === 'home' || state.tab === 'approve') && !typing() && !state.camera) { state.auto = state.gen + 1; VIEWS[state.tab](); } }
   if (document.addEventListener) document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
   if (typeof setInterval !== 'undefined' && (!DEMO || /[?&]poll=1/.test(location.search))) setInterval(function () { if (!document.hidden) refresh(); }, 30000);
 
@@ -193,7 +210,7 @@
     var btn = button('Sign in', 'primary', function () {
       return run(api('login', { personId: sel.value, pin: pin.value, deviceToken: knownToken(sel.value), deviceLabel: phoneLabel() })).then(function (r) {
         var token = r.deviceToken || knownToken(sel.value);
-        saveDevice({ personId: sel.value, deviceToken: token });
+        keepToken(sel.value, token);
         saveSession({ personId: sel.value, deviceToken: token });
         if (r.ok) return start();
         msg.replaceChildren(h('div', { class: 'warn' }, 'This phone is waiting for the owner’s approval. After he approves it, sign in again.'),
@@ -317,6 +334,7 @@
     var kind = 'late', seg = h('div', { class: 'seg' });
     var date = h('input', { type: 'date', value: t.date, min: t.date }), time = h('input', { type: 'time' });
     function drawSeg() {
+      if (kind === 'early') seg.setAttribute('data-changed', '1'); else seg.removeAttribute('data-changed');
       seg.replaceChildren(h('button', { class: kind === 'late' ? 'on' : '', type: 'button', onclick: function () { kind = 'late'; drawSeg(); } }, 'I will be late'),
         h('button', { class: kind === 'early' ? 'on' : '', type: 'button', onclick: function () { kind = 'early'; drawSeg(); } }, 'I will leave early'));
     }

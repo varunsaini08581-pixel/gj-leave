@@ -56,7 +56,11 @@
     var failed = [];
     jobs.forEach(function (j) {
       try { mailer.send(j.email, j.subject, j.body); sent += 1; }
-      catch (e) { j.ids.forEach(function (id) { failed.push([id, -2]); }); } // -2 = the address was refused: in-app only
+      catch (e) {
+        // Only an address that was refused is given up (-2 = in-app only). Anything else (Gmail busy, a passing fault) is tried again on the next run.
+        var refused = /invalid email|invalid recipient|address/i.test(String(e && e.message || e)) && !/too many times|timed out|try again/i.test(String(e && e.message || e));
+        j.ids.forEach(function (id) { failed.push([id, refused ? -2 : '']); });
+      }
     });
     if (failed.length) mark(failed);
     return sent;
@@ -82,8 +86,9 @@
       ctx.db.update('LeaveRequests', r.id, { remindedAt: ctx.now });
       n += 1;
     });
+    var gonePeople = {}; ctx.db.rows('People').forEach(function (p) { if (p.active === false) gonePeople[p.id] = 1; });
     ctx.db.rows('ShortRequests').forEach(function (q) {
-      if (q.status !== 'Pending') return;
+      if (q.status !== 'Pending' || gonePeople[q.personId] || H.lockedMonths(ctx)[Cal.monthKey(q.date)]) return;
       var last = q.remindedAt || q.submittedAt;
       if (ctx.now - last < gap) return;
       H.deciders(ctx).forEach(function (m) { H.notify(ctx, m.id, 'reminder', 'Reminder: late / early request waiting', names[q.personId] + ': ' + q.date + ' ' + q.time, q.id); });
@@ -126,7 +131,7 @@
   function eveningBefore(ctx) {
     var tomorrow = Cal.addDays(H.today(ctx), 1), n = 0;
     ctx.db.rows('LeaveRequests').forEach(function (r) {
-      if ((r.status === 'Approved' || r.status === 'Recorded') && r.route !== 'system' && r.dates[0] === tomorrow) n += once(ctx, r.personId, 'leave-tomorrow', r.id, 'Your leave starts tomorrow', H.niceDates(r.dates) + (r.kind === 'half' ? ' (half day from ' + r.halfStart + ')' : '')) ? 1 : 0;
+      if ((r.status === 'Approved' || r.status === 'Recorded') && r.route !== 'system' && r.dates[0] === tomorrow) n += once(ctx, r.personId, 'leave-tomorrow', r.id + ':' + tomorrow, 'Your leave starts tomorrow', H.niceDates(r.dates) + (r.kind === 'half' ? ' (half day from ' + r.halfStart + ')' : '')) ? 1 : 0;
     });
     return n;
   }

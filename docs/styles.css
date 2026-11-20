@@ -66,3 +66,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .chip.wrap { white-space: normal; border-radius: 12px; }
 input.tick { width: 22px; height: 22px; min-height: 0; margin-right: 10px; flex: none; }
 label:has(> input.tick) { display: flex; align-items: center; min-height: 44px; }
+
+/* Long words (a reason typed without spaces) wrap inside the card instead of widening the page. */
+body, .card, .card p, .card li, h1, h2, td, th { overflow-wrap: anywhere; word-break: break-word; }
+.card, #app { min-width: 0; max-width: 100%; }
+.chip { white-space: normal; max-width: 100%; }

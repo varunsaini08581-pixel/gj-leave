@@ -50,8 +50,10 @@ test('phones: the owner removes a lost phone; the only owner phone cannot be rem
   assert.equal(Core.authenticate(c, 'neha', a.deviceToken).id, 'neha');
   assert.equal(Core.decideDevice(c, varun, a.deviceId, false).status, 'revoked');
   assert.equal(code(() => Core.authenticate(c, 'neha', a.deviceToken)), 'AUTH');
-  for (let i = 0; i < 3; i++) Core.login(c, 'neha', '1111');
-  assert.equal(code(() => Core.login(c, 'neha', '1111')), 'BLOCKED');
+  // Round 12 L7: the same phone asking again is the same request; three DIFFERENT phones reach the cap.
+  for (let i = 0; i < 3; i++) Core.login(c, 'neha', '1111', null, 'Phone ' + i);
+  assert.equal(Core.login(c, 'neha', '1111', null, 'Phone 1').deviceStatus, 'pending');
+  assert.equal(code(() => Core.login(c, 'neha', '1111', null, 'Phone 9')), 'BLOCKED');
   assert.equal(s.db.rows('Notifications').filter(n => n.kind === 'device' && n.to === 'varun').length, 2); // one alert per wave, not per tap
 });
 

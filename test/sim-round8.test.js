@@ -758,7 +758,7 @@ test('one calendar month (November 2026, 5 Sundays) for all 11 people, every job
   eq([day(29).sunday, day(29).entries.map(e => e.name + ':' + e.kind), day(29).risk], [5, ['Anita:roster'], []]);  // 5th Sunday: a working day for all but Anita
   // ---- month report, lock, correction ----
   eq([S.report.locked, S.report.people.length, S.report.lockConfirmedBy], [false, 9, []]);
-  eq(S.report.overrides, [{ personId: 'harsh', dates: [N(5)], reason: 'Wedding in the family OVR-1' }]);
+  eq(S.report.overrides, [{ personId: 'harsh', name: 'Harsh', dates: [N(5)], reason: 'Wedding in the family OVR-1' }]);
   STAFF.forEach((p, i) => eq(JSON.stringify(Object.assign({}, S.report.people[i], { violations: [] })), JSON.stringify(Object.assign({}, M(p), { violations: [] })), 'report row ' + p));
   eq(S.lock1, { month: '2026-11', locked: false, waitingFor: ['Varun'] }); eq(S.lock2, { month: '2026-11', locked: true });
   eq([S.report2.locked, S.report2.lockedBy, S.report2.people.length], [true, 'varun', 9]);

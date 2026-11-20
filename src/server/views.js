@@ -120,7 +120,7 @@
     var acks = locked.filter(function (r) { return r.personId === 'lock-ack'; }).map(function (r) { return r.result.by; });
     var rows = locked.filter(function (r) { return r.personId !== 'correction' && r.personId !== 'lock-ack'; });
     var overrides = ctx.db.rows('LeaveRequests').filter(function (r) { return r.override && Cal.monthKey(r.dates[0]) === monthKey; })
-      .map(function (r) { return { personId: r.personId, dates: r.dates, reason: r.override }; });
+      .map(function (r) { var p = H.find(ctx, 'People', r.personId); return { personId: r.personId, name: p ? p.name : '', dates: r.dates, reason: r.override }; });
     if (rows.length) return { month: monthKey, locked: true, lockedBy: rows[0].lockedBy, lockedAt: rows[0].lockedAt, people: rows.map(function (r) { return r.result; }),
       corrections: locked.filter(function (r) { return r.personId === 'correction'; }).map(function (r) { return r.result; }), overrides: overrides };
     return { month: monthKey, locked: false, lockConfirmedBy: acks, people: staffForMonth(ctx, monthKey).map(function (p) { return Att.myMonth(ctx, p.id, monthKey); }), corrections: [], overrides: overrides };
@@ -147,11 +147,21 @@
       // A request of this month that nobody decided is closed with the month (its days are in the locked
       // result as "counted, not decided"); it must not wait, and remind Aakash, for ever.
       ctx.db.rows('LeaveRequests').forEach(function (r) {
-        if (!H.OPEN[r.status] || !r.dates.every(function (d) { return Cal.monthKey(d) === monthKey; })) return;
+        var shut = lockedMonths(ctx);
+        if (!H.OPEN[r.status] || !r.dates.every(function (d) { return Cal.monthKey(d) === monthKey || shut[Cal.monthKey(d)]; })) return;
         ctx.db.update('LeaveRequests', r.id, { status: 'Cancelled', decisionReason: 'Not decided before ' + monthKey + ' was locked', decidedBy: actor.id, decidedAt: ctx.now,
           history: H.hist(r.history, [{ at: ctx.now, by: actor.id, action: 'closed with the month lock' }]) });
         H.notify(ctx, r.personId, 'decision', 'Leave request closed', H.niceDates(r.dates) + ' was not decided before the month was locked. Ask Aakash if a correction is needed.', r.id);
       });
+      // Everything else of this month that is still waiting is closed with it: nothing of a locked month can wait, or remind, for ever.
+      var inMonth = function (d) { return Cal.monthKey(d) === monthKey; };
+      ctx.db.rows('ShortRequests').forEach(function (q) { if (q.status === 'Pending' && inMonth(q.date)) ctx.db.update('ShortRequests', q.id, { status: 'Closed', decisionReason: 'Not decided before the month was locked', decidedBy: actor.id, decidedAt: ctx.now }); });
+      ctx.db.rows('Outings').forEach(function (o) {
+        if (!inMonth(o.date)) return;
+        if (o.status === 'Back') ctx.db.update('Outings', o.id, { status: 'Confirmed', confirmedAt: ctx.now, confirmedBy: actor.id });
+        else if (o.status === 'Pending' || o.status === 'Approved') ctx.db.update('Outings', o.id, { status: 'Closed', decisionReason: 'Closed with the month lock' });
+      });
+      ctx.db.rows('Punches').forEach(function (x) { if (inMonth(x.date) && x.dress && !x.dressDecision && Att.dressIssues(x.dress).length) ctx.db.update('Punches', x.id, { dressDecision: 'dismissed' }); });
       people.forEach(function (p, i) {
         ctx.db.insert('MonthSheet', { id: ctx.env.randomId(), month: monthKey, personId: p.id, result: results[i], lockedBy: actor.id, lockedAt: ctx.now });
       });

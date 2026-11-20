@@ -7,6 +7,7 @@
   'use strict';
   var req = (typeof require !== 'undefined') ? require : null;
   var Cal = req ? req('../rules/calendar.js') : root.GJCalendar;
+  var Leave = req ? req('../rules/leave.js') : root.GJLeave;
   var Core = req ? req('./core.js') : root.GJCore;
   var H = Core._;
 
@@ -36,7 +37,10 @@
     else ctx.db.insert('Settings', { key: key, value: text, updatedAt: ctx.now, updatedBy: actor.id });
     H.audit(ctx, actor.id, 'settings.' + key, key, { before: before, after: text });
   }
-  function graceTable(ctx) { try { var t = JSON.parse(setting(ctx, 'graceTable') || 'null'); return t && t.length ? t : DEFAULT_GRACE; } catch (e) { return DEFAULT_GRACE; } }
+  function graceTable(ctx) {
+    try { var t = JSON.parse(setting(ctx, 'graceTable') || 'null'); return Array.isArray(t) && t.length && t.every(function (g) { return g && typeof g.key === 'string' && typeof g.item === 'string'; }) ? t : DEFAULT_GRACE; }
+    catch (e) { return DEFAULT_GRACE; }
+  }
   function periodKey(date, per) { return per === 'quarter' ? date.slice(0, 4) + '-Q' + (Math.floor((+date.slice(5, 7) - 1) / 3) + 1) : Cal.monthKey(date); }
 
   // ---------- Manual violations by Aakash ----------
@@ -107,7 +111,7 @@
       owner(actor);
       var v = H.find(ctx, 'Violations', id);
       if (!v || v.disputeState !== 'open') H.fail('NOT_FOUND', 'No open dispute.');
-      H.assertOpen(ctx, v.date);
+      // Varun may decide a dispute also after the month is locked: the locked report stays as it was locked.
       need(note, 'Write your decision note.');
       var state = uphold ? 'upheld' : 'removed';
       ctx.db.update('Violations', id, { disputeState: state, disputeDecidedBy: actor.id, disputeDecidedAt: ctx.now, note: (v.note ? v.note + ' | ' : '') + 'Dispute ' + state + ': ' + String(note).trim() });
@@ -281,7 +285,7 @@
         if (clash.ok) return;
         // Days of this leave that are already over were taken as approved leave and stay so: only the days from today on are given back.
         var taken = r.dates.filter(function (d) { return d < today; });
-        if (taken.length) ctx.db.update('LeaveRequests', r.id, { dates: taken, run: taken.length,
+        if (taken.length) ctx.db.update('LeaveRequests', r.id, { dates: taken, run: taken.length, restrictionViolation: !!r.restrictionViolation && Leave.checkRestrictions(person.name, person, taken, H.restrictions(ctx)).violations > 0,
           history: H.hist(r.history, [{ at: ctx.now, by: actor.id, action: 'shortened – clash (rule changed)', from: { dates: r.dates } }]) });
         else ctx.db.update('LeaveRequests', r.id, { status: 'Rejected – clash', decisionReason: clash.blocks[0].message, decidedAt: ctx.now, decidedBy: 'system',
           history: H.hist(r.history, [{ at: ctx.now, by: actor.id, action: 'rejected – clash (rule changed)' }]) });
@@ -357,6 +361,10 @@
       if (key === 'startDate' && !Cal.isDate(value)) H.fail('BLOCKED', 'Pick the start date.');
       var changedDays = [];
       if (key === 'closedDays') { var was = H.closedSet(ctx); changedDays = value.filter(function (d) { return !was[d]; }).concat(Object.keys(was).filter(function (d) { return value.indexOf(d) === -1; })); }
+      if (key === 'graceTable' && !(Array.isArray(value) && value.length <= 40 && value.every(function (g) {
+        return g && typeof g === 'object' && typeof g.item === 'string' && g.item.trim() && typeof g.key === 'string' && /^[a-z0-9-]{1,40}$/.test(g.key) &&
+          typeof g.grace === 'number' && g.grace >= 0 && g.grace <= 31 && (g.per === 'month' || g.per === 'quarter' || g.per === 'week');
+      }))) H.fail('BLOCKED', 'The grace table is not valid.');
       putSetting(ctx, actor, key, value);
       // Closed days are never written into the rows: everything is counted again from the rows as they
       // are, with the closed days left out. So a closed day entered by mistake can simply be removed again.

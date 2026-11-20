@@ -180,6 +180,9 @@ BUG ROUND 8 (independent simulation with its own hand count: 3 shop days, a full
 ### 20 Nov 2026, 19:56 IST
 Rounds 9 (0/1/7/5) and 10 (0/1/3/3) fixed: 26 reproducers pass, 319 tests. Owner's night-reminder rule built. Server version 9.
 
+### 20 Nov 2026, 20:34 IST
+Rounds 11 (0/1/9/4) and 12 (0/1/5/10) fixed: 42 reproducers pass (2 round-12 tests adjusted with reasons: L3 offline sign-out, L9 photo removed not avoided), 361 tests. Server version 9.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
@@ -240,6 +243,13 @@ Rounds 9 (0/1/7/5) and 10 (0/1/3/3) fixed: 26 reproducers pass, 319 tests. Owner
 56. A clash rule changed during a running leave: days already over stay approved leave, only days from today on are given back.
 57. A leave cancelled or rejected after the person came in: the late / early time of that day is counted then, as informed.
 58. Staff may edit one request at most 10 times; late / early requests only for the next 14 days, at most 8 open. `installTriggers` sets `startDate` to that day.
+59. A LOCKED month is frozen in the rows too: no violation, minute or absence of a locked month is added, removed or counted again by anything that happens later. Only Varun's decision on an open dispute is still allowed (the locked report itself stays as locked). The "last 3 months" line shows the locked number.
+60. Locking a month closes everything of that month that is still waiting: late / early requests, outings (a confirmed-back wait is confirmed, a never-closed outing is closed with no minutes), dress flags, and leave requests whose days all lie in locked months. A request that reaches into an open month can still be decided; its violation is dated on its first open day.
+61. "End this leave" on the last day of a running leave keeps the days before today as leave and gives back today only.
+62. A leave that was approved and then cancelled for today: coming in late that day counts as informed (the absence was known), whichever tap came first. Minutes set aside when a leave was granted come back as they were when it is cancelled. Going-out minutes follow the same rule.
+63. OPEN, for the owner (round 12 H1): the owner could lock himself out (new or lost phone: only the owner can approve phones). Built: (a) the phone keeps one approval per person, so trying a staff account on the owner's phone loses nothing; (b) Aakash can approve ONLY the owner's own new phone request (right PIN already entered), the owner is alerted; (c) `resetOwnerPhones` can be run by hand in the Apps Script editor. To confirm with the owner: is (b) acceptable, or editor-only recovery?
+64. "Sign out" with no connection does not sign out (the server could not be told); the app says so. A photo uploaded for a check-in that is then refused is moved to the Drive bin.
+65. A first sign-in repeated from the same phone is the same request (new token), not a second one. Changed rows are written before new rows (alerts), so a Sheet failure cannot announce a change that was not saved.
 
 ## Next
 - Owner still to answer: late/early request still PENDING when the person arrives - is "approved later = informed, rejected = not informed" right? (built this way)
