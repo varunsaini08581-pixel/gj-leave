@@ -142,6 +142,11 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - A second check-in the same day is refused before any photo is stored.
 - Tests: 116 pass; management phone check passes.
 
+### 20 Nov 2026, 17:45 IST
+- Server version 7 is live on TEST (same URL). Measured with the timing info now returned by the server: Today 0.5 s on the server (0 Sheet reads), login 1.4 s, phone approval 0.8 s, check-in with photo 4.1 s (Drive 1.8 s, Sheet writes 1.4 s). On top of that Google's web-app layer adds about 2 s per call that the app cannot remove. So on a phone: screens about 2.3 s, simple actions about 3 s, check-in about 6 s (was 12-15 s).
+- Thumbnail read back through the API matched byte for byte; Today at GJ lists the check-ins.
+- Test rows made by these checks were cleared from the TEST Sheet and `setupOrUpgrade` was run to refresh the read cache; the owner's first sign-in will be the bootstrap phone again.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
@@ -156,6 +161,10 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 11. Shop-closed days are read from Settings `closedDays`; no screen for it yet.
 
 ## Next
-- Late/early approval by Aakash (owner correction), then redeploy a new version.
-- Screens still missing: calendar, month report, settings, restrictions, Today at GJ, camera check-in, disputes, manual violations.
-- Edit-after-approval (back to pending, re-check), manual violations by Aakash with grace table, disputes (24 h), settings API, month lock, 12-person month simulation, email alerts + 2-hour reminder trigger.
+- Owner still to answer: late/early request still PENDING when the person arrives - is "approved later = informed, rejected = not informed" right? (built this way)
+- 12-person month simulation against a hand count (handoff Part 7).
+- About 10 bug rounds with independent review agents (rule correctness; privacy and security; concurrency and dates; phone UI; upgrade and deploy safety; full shop-day simulation; edge cases; re-review of fixes). Done only when 2 rounds in a row have 0 Critical and 0 High.
+- Dress check on REAL shop photos (needs the owner or staff to take a few check-in photos at the shop).
+- Staff guide (visual PDF, simple Hinglish), owner page (what to watch, what the system cannot catch).
+- Release, only after the owner's OK: real Sheet "GJ Leave", real people / duty times / salary structure from the owner, new PINs, bind phones, set shop location, \`installTriggers\`, point \`docs/config.js\` at the real deployment.
+- Redeploy recipe (TEST): open the Apps Script project, load \`apps-script/Code.js\` of the commit, save, run \`setupOrUpgrade\`, Deploy > Manage deployments > edit > New version > Deploy. Same URL. No Google permission needed unless a new Google service is added.
