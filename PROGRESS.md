@@ -147,6 +147,11 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Thumbnail read back through the API matched byte for byte; Today at GJ lists the check-ins.
 - Test rows made by these checks were cleared from the TEST Sheet and `setupOrUpgrade` was run to refresh the read cache; the owner's first sign-in will be the bootstrap phone again.
 
+### 20 Nov 2026, 17:52 IST
+- `test/month-simulation.test.js`: October 2026 with 12 people (9 staff + new joiner Garvit + Aakash + Varun) driven through the real server functions: auto-approved leave, three emergencies, not-informed lates and passes, going out, special approval, restricted week, half day, absent with no request, recorded-only leave, early leaving, bank overflow, Anita's weekdays, Aakash's leave to Varun. Every person's leaves, days cut, bank minutes, minutes beyond the bank, violations and rupees match a hand count written in the test; shop totals 6 violations and Rs 1,764.
+- Bug rounds 1-3 started with three independent review agents (rule correctness vs the handoff, privacy and security, concurrency / dates / storage). They only write findings and failing reproducers; fixes follow.
+- Tests: 117 pass.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
@@ -159,6 +164,11 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 9. A day with more than 2 hours away becomes a half day (0.5 leave) automatically, more than 4 h 30 min a full day, counted in the quota. No emergency count is added. If the time was NOT informed and over 30 min, the normal "not informed, more than 30 min" violation still applies.
 10. Absent with no request: counted as 1 leave day + 1 violation. Muskan: recorded only. Aakash and Varun are not tracked.
 11. Shop-closed days are read from Settings `closedDays`; no screen for it yet.
+
+12. Late / early request still pending when the person arrives or leaves: counted as not informed for now; when Aakash decides later, approved = informed, rejected = not informed. Asked the owner twice, no answer yet.
+13. A new joiner in the middle of a month: the roster Sundays of the whole month are counted in that month's 5 (not pro-rated), and the absent check does not look at days before the joining date because it only runs for "today". The handoff lists "a new joiner or a leaver" as an edge case but gives no rule.
+14. Going-out requests are not part of the 2-hour reminder to Aakash.
+15. Manual check-in by Aakash when a phone or camera fails (no photo, reason required, labelled).
 
 ## Next
 - Owner still to answer: late/early request still PENDING when the person arrives - is "approved later = informed, rejected = not informed" right? (built this way)
