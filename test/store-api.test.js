@@ -154,7 +154,7 @@ test('the Apps Script bundle builds and loads with every module wired', () => {
   const code = fs.readFileSync(path.join(__dirname, '..', 'apps-script', 'Code.js'), 'utf8');
   const sandbox = {}; sandbox.globalThis = sandbox;
   vm.runInNewContext(code, sandbox);
-  ['GJCalendar', 'GJClash', 'GJLeave', 'GJMinutes', 'GJSchema', 'GJStore', 'GJCore', 'GJAttendance', 'GJAdmin', 'GJViews', 'GJJobs', 'GJApi'].forEach(n => assert.ok(sandbox[n], n));
+  ['GJCalendar', 'GJClash', 'GJLeave', 'GJMinutes', 'GJSchema', 'GJCacheGrid', 'GJStore', 'GJCore', 'GJAttendance', 'GJAdmin', 'GJViews', 'GJJobs', 'GJApi'].forEach(n => assert.ok(sandbox[n], n));
   ['doPost', 'doGet', 'setupOrUpgrade'].forEach(n => assert.equal(typeof sandbox[n], 'function', n));
   // The bundle works without require(): run setup + a call inside the sandbox on a fake grid.
   const g = fakeGrid();

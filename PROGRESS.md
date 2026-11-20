@@ -123,6 +123,12 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Timers (`installTriggers`) are NOT installed on the TEST Sheet on purpose: with test data they would email the owner a fake absent list every night. They go on at release.
 - Tests: 109 pass.
 
+### 20 Nov 2026, 17:34 IST
+- Measured on the real server (v3): about 2.4 s fixed per call plus about 0.5 s for every tab read; Today took 5-8 s, check-in 12-15 s. Too slow.
+- `src/server/cachegrid.js`: each tab is read from the Sheet once and then served from the Apps Script cache. A version per tab makes it safe: a writer, after its writes are on the Sheet and still inside the lock, moves the tab to a new version, so nobody can read rows from before a write. Cached data also expires after 10 minutes. If the cache fails the app simply reads the Sheet. Tests: fewer reads, same Sheet content with and without cache, no stale read after a write, overlapping requests cannot poison it.
+- Note for the owner page: a manual edit made directly in the Sheet can take up to 10 minutes to show in the app.
+- Tests: 114 pass.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.

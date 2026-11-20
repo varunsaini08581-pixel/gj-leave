@@ -64,8 +64,19 @@ function gjEnv_() {
   };
 }
 
+function gjCache_() {
+  var c = CacheService.getScriptCache();
+  return {
+    getAll: function (keys) { return c.getAll(keys); },
+    put: function (k, v, ttl) { c.put(k, v, ttl); },
+    putAll: function (map, ttl) { c.putAll(map, ttl); }
+  };
+}
+function gjCachedGrid_() {
+  return GJCacheGrid.wrap(gjGrid_(), gjCache_(), Object.keys(GJSchema.TABS), function () { return Utilities.getUuid().slice(0, 8); });
+}
 function gjCtx_() {
-  var ctx = { db: GJStore.open(gjGrid_(), { buffer: true }), now: Date.now(), env: gjEnv_() }; // server time only
+  var ctx = { db: GJStore.open(gjCachedGrid_(), { buffer: true }), now: Date.now(), env: gjEnv_() }; // server time only
   gjDb_ = ctx.db;
   return ctx;
 }
@@ -76,6 +87,9 @@ function setupOrUpgrade() {
   lock.waitLock(25000);
   try {
     var done = GJStore.setup(gjGrid_());
+    // Setup may have changed columns: retire every cached copy.
+    var all = {}; Object.keys(GJSchema.TABS).forEach(function (t) { all['v:' + t] = Utilities.getUuid().slice(0, 8); });
+    CacheService.getScriptCache().putAll(all, 21600);
     Logger.log(done.length ? done.join('\n') : 'Nothing to do. Already up to date.');
     return done;
   } finally { lock.releaseLock(); }

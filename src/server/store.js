@@ -118,6 +118,7 @@
         t.dirty.forEach(function (r) { if (r.__row > 0) grid.writeRow(tab, r.__row, toArray(tab, t.headers, r)); });
         t.dirty = [];
       });
+      if (grid.commit) grid.commit(); // retire cached copies of the tabs just written
     }
     var db = {
       rows: function (tab) { return load(tab).rows; },
