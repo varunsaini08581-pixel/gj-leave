@@ -47,6 +47,7 @@ def build(out):
     s.append(g.table(['Baat', 'Kyun'], [
         ['Google Sheet ko haath se edit mat karo', 'App ka hisaab bigad sakta hai. Zaroori badlav Settings se karo. '
                                                    'Haath se kiya badlav app mein 10 minute tak der se dikh sakta hai'],
+        ['Sheet kisi ke saath share mat karo (Aakash ke saath bhi nahi)', 'Jiske paas Sheet ka edit access hai wo "GJ Leave" menu se owner ka PIN badal sakta hai aur sab salary dekh sakta hai'],
         ['Sheet ki row kabhi delete mat karo', 'App kuch delete nahi karta; poora itihaas isi par tika hai'],
         ['Apps Script wala Google account aapka hi rahe', 'App usi account ke naam se chalta hai; password badalne se farak nahi, account band hone se app band'],
         ['Speed', 'Screen 2-3 second, check in lagbhag 6 second. Ye Google Apps Script ki seema hai'],

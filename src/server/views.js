@@ -92,7 +92,7 @@
     });
     // Owner: from the 4th request of one day, everyone sees it in red.
     var h0 = (r.history || [])[0];
-    if (h0 && h0.action === 'submitted' && h0.by === r.personId) { var nth = H.sentOnDay(ctx, r.personId, h0.at, r.id) + 1; if (nth > 3) out.tooMany = nth; }
+    if (h0 && h0.action === 'submitted' && h0.by === r.personId) { var nth = H.sentOnDay(ctx, r.personId, h0.at, r.id, true) + 1; if (nth > 3) out.tooMany = nth; }
     var mm = Att.myMonth(ctx, p.id, Cal.monthKey(r.dates[0]));
     out.month = { leaves: mm.leaves.total, free: mm.leaves.free, emergencies: mm.leaves.emergencies, bankLeft: mm.bank.left, violations: mm.ladder.violations };
     return out;

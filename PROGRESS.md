@@ -196,6 +196,9 @@ Rounds 17 (0/0/7/4) and 18 (0/0/3/5) fixed: 29 reproducers pass. Owner decisions
 ### 21 Nov 2026, 00:00 IST
 Go-live prep: real Sheet 'GJ Leave' created (id 1M72Pp0SqqNDyqO2fYLtC7tZB3BMwSQSWMW4HXxVVOCY), bound script being set up; owner sets his own PIN from the Sheet menu.
 
+### 21 Nov 2026, 00:09 IST
+Round 19 (0/1/2/1, delta review of ab1f7f3) fixed: 4 reproducers pass (R19-4 helper made to flush and clear its cache like the real server), 462 tests.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
@@ -275,6 +278,7 @@ Go-live prep: real Sheet 'GJ Leave' created (id 1M72Pp0SqqNDyqO2fYLtC7tZB3BMwSQS
 75. Requests per day (owner 20 Nov): counted per IST day, own sends only (edits and requests Aakash enters for someone are not counted). 4th and 5th: auto-approval becomes "Pending with Aakash"; 6th and later: "Pending with Varun" (a request that needs both stays with both); a records-only person stays "Recorded" but still sees the red warning. From the 7th, no alert is sent (Varun, Aakash, the person) so one phone cannot fill the alerts and the day's e-mails; the request is still in Approvals. Replaces the hard limit of 6 in 70.
 76. Free outing once a day (owner 20 Nov): the first short outing of the day by approval time is free; any other outing of 15 min or less that day counts whole. The free outing still counts toward the "more than 2 hours away in a day" total (unchanged).
 77. Round 17/18 fixes: duty hours are kept per day (a change applies from tomorrow); a late / early request after the punch is refused; "informed because of a leave" needs the leave GRANTED before the arrival / leaving and counts only the hours it covered; one early leaving = one row while nothing is approved; outings count only inside duty hours; a violation follows its day and rule when the rows of a day change shape; a closed day clears the manager's minutes too; an edit cannot move a leave wholly into a locked month; the month lock closes waiting late / early requests BEFORE working out the result; setup adds missing default rules after a broken first run; damaged cells (DayMinutes kind, MonthSheet rows) are left out and named instead of breaking screens.
+78. Round 19: an edited request keeps its place in the request count of the day it was first sent (the edit is routed like the preview says); the red line counts only requests sent BEFORE it; a change of duty hours together with a roster / records-only / active change: the roster part applies from today, the hours from tomorrow; the owner's first phone counts as "in use" from its first call, also a read. The Sheet menu "Set owner PIN" works for anyone with edit access to the Sheet: the Sheet is shared with nobody (owner page says so).
 
 ## Next
 - Owner still to answer: late/early request still PENDING when the person arrives - is "approved later = informed, rejected = not informed" right? (built this way)

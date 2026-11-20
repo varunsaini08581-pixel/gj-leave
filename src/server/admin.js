@@ -143,7 +143,7 @@
       // Changing the end, the reason or the kind does not make that day a late request.
       var sameStart = Array.isArray(input.dates) && input.dates.slice().sort()[0] === r.dates[0];
       var keep = sameStart ? { at: r.noticeAt || r.submittedAt, had: r.dates } : { had: r.dates };
-      var ev = H.evaluate(ctx, person, input, id, keep);
+      var ev = H.requestLimit(ctx, person, actor, H.evaluate(ctx, person, input, id, keep), id);
       if (ev.decision === 'blocked') H.fail('BLOCKED', ev.reasons.join(' '));
       // Handoff Part 6: an edit after approval goes back to pending. It is never approved again by the system.
       if (r.status === 'Approved' && ev.decision === 'auto') { ev.decision = 'aakash'; ev.reasons = ['Edited after approval.']; }
@@ -246,7 +246,10 @@
         if (changed) {
           // New duty hours apply from tomorrow (today's arrival is judged by the hours of this morning); the other changes from today.
           var past = Array.isArray(existing.history) ? existing.history.slice() : [], until = hours ? H.today(ctx) : Cal.addDays(H.today(ctx), -1);
-          if (!past.length || past[past.length - 1].until < until) past.push({ until: until, sundayOff: existing.sundayOff, active: existing.active !== false, noApproval: !!existing.noApproval, dutyStart: existing.dutyStart, dutyEnd: existing.dutyEnd });
+          var yest = Cal.addDays(H.today(ctx), -1), old = { sundayOff: existing.sundayOff, active: existing.active !== false, noApproval: !!existing.noApproval, dutyStart: existing.dutyStart, dutyEnd: existing.dutyEnd };
+          if (!past.length || past[past.length - 1].until < yest) past.push(Object.assign({ until: yest }, old));
+          // Today: the new roster / records-only / active already apply, the old duty hours still do (they change from tomorrow).
+          if (hours && (!past.length || past[past.length - 1].until < until)) past.push(Object.assign({ until: until }, old, { sundayOff: clean.sundayOff, active: clean.active !== false, noApproval: !!clean.noApproval }));
           clean.history = past;
         }
         var before = {}; PERSON_FIELDS.forEach(function (f) { before[f] = existing[f]; });

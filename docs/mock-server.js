@@ -1552,11 +1552,11 @@
     return true;
   }
   /** Leave requests the person sent on the IST day of `at` (their own sends; edits are not new requests). */
-  function sentOnDay(ctx, personId, at, exceptId) {
+  function sentOnDay(ctx, personId, at, exceptId, before) {
     var d0 = toMs(new Date(at + IST_OFFSET_MS).toISOString().slice(0, 10), '00:00');
     return ctx.db.rows('LeaveRequests').filter(function (x) {
       var h = (x.history || [])[0];
-      return x.id !== exceptId && x.personId === personId && x.route !== 'system' && h && h.action === 'submitted' && h.by === personId && h.at >= d0 && h.at < d0 + 86400000;
+      return x.id !== exceptId && x.personId === personId && x.route !== 'system' && h && h.action === 'submitted' && h.by === personId && h.at >= d0 && h.at < d0 + 86400000 && (!before || h.at < at);
     }).length;
   }
   /**
@@ -1565,7 +1565,11 @@
    */
   function requestLimit(ctx, person, actor, ev, exceptId) {
     if (!ev || ev.decision === 'blocked' || actor.id !== person.id || person.role !== 'staff') return ev;
-    var n = sentOnDay(ctx, person.id, ctx.now, exceptId); // sent before this one
+    // An edited request keeps its place in the count of the day it was first sent.
+    var orig = exceptId ? find(ctx, 'LeaveRequests', exceptId) : null, h0 = orig && (orig.history || [])[0];
+    if (orig && !(h0 && h0.action === 'submitted' && h0.by === person.id)) return ev; // entered by Aakash: not counted
+    var at = h0 ? h0.at : ctx.now;
+    var n = sentOnDay(ctx, person.id, at, exceptId, true); // sent before this one
     if (n < 3) return ev;
     var to = n >= 5 ? 'Varun' : 'Aakash';
     ev = Object.assign({}, ev, { tooMany: n + 1, reasons: (ev.reasons || []).slice(), warnings: (ev.warnings || []).slice() });
@@ -1890,7 +1894,7 @@
 
   var api = { REASONS: REASONS, setPin: setPin, login: login, decideDevice: decideDevice, authenticate: authenticate,
     signOut: signOut, previewLeave: previewLeave, submitLeave: submitLeave, decideLeave: decideLeave, cancelLeave: cancelLeave, toMs: toMs,
-    _: { sentOnDay: sentOnDay, withdrawRow: withdrawRow, reviveRow: reviveRow, removedByVarun: removedByVarun, restrictions: restrictions, rules: rules, syncLeaveViolations: syncLeaveViolations, hist: addHistory, MAX_EDITS: MAX_EDITS, toldWithdrawn: toldWithdrawn, addDays: Cal.addDays, deciders: deciders, isEmergency: isEmergency, renumberEmergencies: renumberEmergencies, niceDates: niceDates, hooks: hooks, lockedMonths: lockedMonths, assertOpen: assertOpen, stamp: stamp, fail: fail, failKeep: failKeep, closedSet: closedSet, autoDays: autoDays, markAbsent: markAbsent, hasCheckIn: hasCheckIn, dayOver: dayOver,
+    _: { requestLimit: requestLimit, sentOnDay: sentOnDay, withdrawRow: withdrawRow, reviveRow: reviveRow, removedByVarun: removedByVarun, restrictions: restrictions, rules: rules, syncLeaveViolations: syncLeaveViolations, hist: addHistory, MAX_EDITS: MAX_EDITS, toldWithdrawn: toldWithdrawn, addDays: Cal.addDays, deciders: deciders, isEmergency: isEmergency, renumberEmergencies: renumberEmergencies, niceDates: niceDates, hooks: hooks, lockedMonths: lockedMonths, assertOpen: assertOpen, stamp: stamp, fail: fail, failKeep: failKeep, closedSet: closedSet, autoDays: autoDays, markAbsent: markAbsent, hasCheckIn: hasCheckIn, dayOver: dayOver,
       withdrawViolations: withdrawViolations, GRANTED: GRANTED, ABSENT: ABSENT, HALF_DAY_MINUTES: HALF_DAY_MINUTES, settingValue: settingValue, hhmmToMin: hhmmToMin, find: find, audit: audit, notify: notify, byRole: byRole, today: today, peopleMap: peopleMap, rules: rules,
       approvedAway: approvedAway, liveLeaves: liveLeaves, IST_OFFSET_MS: IST_OFFSET_MS,
       evaluate: evaluate, onGranted: onGranted, ruleLabel: ruleLabel, STATUS_FOR: STATUS_FOR, OPEN: OPEN } };
@@ -2884,7 +2888,7 @@
       // Changing the end, the reason or the kind does not make that day a late request.
       var sameStart = Array.isArray(input.dates) && input.dates.slice().sort()[0] === r.dates[0];
       var keep = sameStart ? { at: r.noticeAt || r.submittedAt, had: r.dates } : { had: r.dates };
-      var ev = H.evaluate(ctx, person, input, id, keep);
+      var ev = H.requestLimit(ctx, person, actor, H.evaluate(ctx, person, input, id, keep), id);
       if (ev.decision === 'blocked') H.fail('BLOCKED', ev.reasons.join(' '));
       // Handoff Part 6: an edit after approval goes back to pending. It is never approved again by the system.
       if (r.status === 'Approved' && ev.decision === 'auto') { ev.decision = 'aakash'; ev.reasons = ['Edited after approval.']; }
@@ -2987,7 +2991,10 @@
         if (changed) {
           // New duty hours apply from tomorrow (today's arrival is judged by the hours of this morning); the other changes from today.
           var past = Array.isArray(existing.history) ? existing.history.slice() : [], until = hours ? H.today(ctx) : Cal.addDays(H.today(ctx), -1);
-          if (!past.length || past[past.length - 1].until < until) past.push({ until: until, sundayOff: existing.sundayOff, active: existing.active !== false, noApproval: !!existing.noApproval, dutyStart: existing.dutyStart, dutyEnd: existing.dutyEnd });
+          var yest = Cal.addDays(H.today(ctx), -1), old = { sundayOff: existing.sundayOff, active: existing.active !== false, noApproval: !!existing.noApproval, dutyStart: existing.dutyStart, dutyEnd: existing.dutyEnd };
+          if (!past.length || past[past.length - 1].until < yest) past.push(Object.assign({ until: yest }, old));
+          // Today: the new roster / records-only / active already apply, the old duty hours still do (they change from tomorrow).
+          if (hours && (!past.length || past[past.length - 1].until < until)) past.push(Object.assign({ until: until }, old, { sundayOff: clean.sundayOff, active: clean.active !== false, noApproval: !!clean.noApproval }));
           clean.history = past;
         }
         var before = {}; PERSON_FIELDS.forEach(function (f) { before[f] = existing[f]; });
@@ -3271,7 +3278,7 @@
     });
     // Owner: from the 4th request of one day, everyone sees it in red.
     var h0 = (r.history || [])[0];
-    if (h0 && h0.action === 'submitted' && h0.by === r.personId) { var nth = H.sentOnDay(ctx, r.personId, h0.at, r.id) + 1; if (nth > 3) out.tooMany = nth; }
+    if (h0 && h0.action === 'submitted' && h0.by === r.personId) { var nth = H.sentOnDay(ctx, r.personId, h0.at, r.id, true) + 1; if (nth > 3) out.tooMany = nth; }
     var mm = Att.myMonth(ctx, p.id, Cal.monthKey(r.dates[0]));
     out.month = { leaves: mm.leaves.total, free: mm.leaves.free, emergencies: mm.leaves.emergencies, bankLeft: mm.bank.left, violations: mm.ladder.violations };
     return out;
@@ -3870,6 +3877,9 @@
       // attempted, nothing is half-saved, and the phone gets a clear answer.
       if (ctx.db.schemaProblems && ctx.db.schemaProblems().length) return { ok: false, code: 'UPGRADE', message: 'The app is being updated. Please try again in a few minutes.' };
       var actor = Core.authenticate(ctx, request.personId, request.deviceToken);
+      // The owner's first phone is in use from its first call (also a read): a repeated first sign-in is then an ordinary new phone request.
+      if (actor.deviceId && ctx.db.rows('Devices').some(function (d) { return d.id === actor.deviceId && d.decidedBy === 'bootstrap'; }))
+        locked(ctx, function () { var d = ctx.db.rows('Devices').filter(function (x) { return x.id === actor.deviceId && x.decidedBy === 'bootstrap'; })[0]; if (d) ctx.db.update('Devices', d.id, { decidedBy: 'bootstrap-used' }); });
       if (own(READ_ONLY, action)) return { ok: true, data: PRIVATE[action](ctx, actor, args) };
       if (own(PREPARE, action)) args = PREPARE[action](ctx, actor, args);
       var photoId = own(PREPARE, action) && args ? args.photoId : '';

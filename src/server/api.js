@@ -296,6 +296,9 @@
       // attempted, nothing is half-saved, and the phone gets a clear answer.
       if (ctx.db.schemaProblems && ctx.db.schemaProblems().length) return { ok: false, code: 'UPGRADE', message: 'The app is being updated. Please try again in a few minutes.' };
       var actor = Core.authenticate(ctx, request.personId, request.deviceToken);
+      // The owner's first phone is in use from its first call (also a read): a repeated first sign-in is then an ordinary new phone request.
+      if (actor.deviceId && ctx.db.rows('Devices').some(function (d) { return d.id === actor.deviceId && d.decidedBy === 'bootstrap'; }))
+        locked(ctx, function () { var d = ctx.db.rows('Devices').filter(function (x) { return x.id === actor.deviceId && x.decidedBy === 'bootstrap'; })[0]; if (d) ctx.db.update('Devices', d.id, { decidedBy: 'bootstrap-used' }); });
       if (own(READ_ONLY, action)) return { ok: true, data: PRIVATE[action](ctx, actor, args) };
       if (own(PREPARE, action)) args = PREPARE[action](ctx, actor, args);
       var photoId = own(PREPARE, action) && args ? args.photoId : '';
