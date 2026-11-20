@@ -59,7 +59,9 @@ function gjEnv_() {
       var lock = LockService.getScriptLock();
       lock.waitLock(25000);
       gjLockDepth_ += 1;
-      try { var result = fn(); if (gjDb_) gjDb_.flush(); return result; } finally { gjLockDepth_ -= 1; lock.releaseLock(); }
+      // Writes are flushed while the lock is still held, also when the action ends with an error
+      // (for example a wrong PIN must still be counted).
+      try { return fn(); } finally { try { if (gjDb_) gjDb_.flush(); } finally { gjLockDepth_ -= 1; lock.releaseLock(); } }
     }
   };
 }

@@ -20,7 +20,7 @@
   var MAX_CHARS = 95000;    // one cache value may hold 100 KB
 
   function wrap(grid, cache, tabNames, newVersion) {
-    var versions = null, dirty = {};
+    var versions = null, dirty = {}, readAt = {};
     function vkey(tab) { return 'v:' + tab; }
     function loadVersions() {
       if (versions) return versions;
@@ -38,6 +38,7 @@
     function dkey(tab) { return 'd:' + tab + ':' + (loadVersions()[tab] || 'x'); }
     function read(tab) {
       var key = dkey(tab), text = null;
+      readAt[tab] = loadVersions()[tab];
       try { text = (cache.getAll([key]) || {})[key]; } catch (e) { text = null; }
       if (text) { try { return JSON.parse(text); } catch (e) { /* fall through to the Sheet */ } }
       var data = grid.read(tab);
@@ -53,12 +54,22 @@
       appendRows: function (tab, rows) { dirty[tab] = true; return grid.appendRows(tab, rows); },
       writeRow: function (tab, i, row) { dirty[tab] = true; return grid.writeRow(tab, i, row); },
       /** Called by the store after its writes are on the Sheet (inside the lock): retire the old versions. */
-      commit: function () {
+      commit: function (full) {
         var names = Object.keys(dirty);
         if (!names.length) return;
-        var map = {};
+        var map = {}, current = {};
         loadVersions();
-        names.forEach(function (t) { versions[t] = newVersion(); map[vkey(t)] = versions[t]; });
+        // The writer holds the server lock here. If nobody else has written a tab since this
+        // request read it, the request knows the tab's exact new content and can cache it.
+        try { current = cache.getAll(names.map(vkey)) || {}; } catch (e) { current = {}; }
+        names.forEach(function (t) {
+          var untouched = readAt[t] && current[vkey(t)] === readAt[t];
+          versions[t] = newVersion(); map[vkey(t)] = versions[t];
+          if (full && full[t] && untouched) {
+            try { var json = JSON.stringify(full[t]); if (json.length <= MAX_CHARS) cache.put('d:' + t + ':' + versions[t], json, DATA_TTL); } catch (e) { /* optional */ }
+          }
+          readAt[t] = versions[t];
+        });
         dirty = {};
         try { cache.putAll(map, VERSION_TTL); } catch (e) { /* if this fails the data TTL still bounds staleness */ }
       }

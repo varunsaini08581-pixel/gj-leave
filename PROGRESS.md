@@ -129,6 +129,12 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Note for the owner page: a manual edit made directly in the Sheet can take up to 10 minutes to show in the app.
 - Tests: 114 pass.
 
+### 20 Nov 2026, 17:37 IST
+- Real-server timings on v4 (read cache): repeat reads dropped to 1.4-2.0 s (names 1.4, Today 2.0, My month 1.6). Writes were still slow (login 6 s, check-in 10 s) because every write emptied the cache and the next call read the Sheet again.
+- Now the writer, still holding the lock, hands the cache the exact new content of the tabs it read in full, but only if nobody else wrote that tab since it read it (checked by version). Otherwise it only retires the old copy. Tests for both cases.
+- Login, PIN set and phone approval now run inside the server lock (they write), and buffered writes are flushed inside the lock even when the action ends in an error (a wrong PIN is still counted).
+- Tests: 116 pass.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.

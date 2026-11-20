@@ -81,3 +81,29 @@ test('a broken cache never breaks the app: it just reads the Sheet', () => {
   db.insert('Settings', { key: 'k', value: 'v' }); db.flush();
   assert.equal(Store.open(wrap(g, bad, Object.keys(TABS), ver)).rows('Settings').some(s => s.key === 'k'), true);
 });
+
+test('after a write the writer hands the cache the new content: the next request reads nothing from the Sheet', () => {
+  const w = world();
+  w.req(['2026-11-20', '10:00'], c => Core.submitLeave(c, w.mem.actor('Vikas'), leave(['2026-11-25'])));   // warms People etc. and writes
+  w.g.calls.read = 0;
+  const db = w.open();
+  assert.equal(db.rows('LeaveRequests').length, 1);
+  assert.equal(db.rows('LeaveRequests')[0].status, 'Approved');
+  assert.equal(db.rows('People').length, 11);
+  assert.equal(w.g.calls.read, 0);
+  // The cached copy is exactly what the Sheet holds, row for row.
+  assert.deepEqual(db.rows('LeaveRequests')[0].dates, Store.open(w.g).rows('LeaveRequests')[0].dates);
+  // An update through the cached copy lands on the right Sheet row.
+  w.req(['2026-11-20', '10:05'], c => Core.cancelLeave(c, w.mem.actor('Vikas'), db.rows('LeaveRequests')[0].id));
+  assert.equal(Store.open(w.g).rows('LeaveRequests')[0].status, 'Cancelled');
+});
+
+test('if another request wrote the tab in between, the writer does NOT cache its own (possibly stale) copy', () => {
+  const w = world();
+  const gridA = wrap(w.g, w.cache, Object.keys(TABS), ver); const dbA = Store.open(gridA, { buffer: true });
+  dbA.rows('Settings');                                                          // A reads Settings (empty of key k)
+  w.req(['2026-11-20', '10:00'], c => { c.db.insert('Settings', { key: 'k', value: 'from B' }); }); // B writes in between
+  dbA.insert('Settings', { key: 'a', value: 'from A' }); dbA.flush();            // A writes without having seen B's row
+  const keys = Store.open(wrap(w.g, w.cache, Object.keys(TABS), ver)).rows('Settings').map(s => s.key);
+  assert.ok(keys.includes('k') && keys.includes('a'), keys.join(','));           // both rows visible: read from the Sheet, not A's copy
+});

@@ -556,7 +556,7 @@
   var MAX_CHARS = 95000;    // one cache value may hold 100 KB
 
   function wrap(grid, cache, tabNames, newVersion) {
-    var versions = null, dirty = {};
+    var versions = null, dirty = {}, readAt = {};
     function vkey(tab) { return 'v:' + tab; }
     function loadVersions() {
       if (versions) return versions;
@@ -574,6 +574,7 @@
     function dkey(tab) { return 'd:' + tab + ':' + (loadVersions()[tab] || 'x'); }
     function read(tab) {
       var key = dkey(tab), text = null;
+      readAt[tab] = loadVersions()[tab];
       try { text = (cache.getAll([key]) || {})[key]; } catch (e) { text = null; }
       if (text) { try { return JSON.parse(text); } catch (e) { /* fall through to the Sheet */ } }
       var data = grid.read(tab);
@@ -589,12 +590,22 @@
       appendRows: function (tab, rows) { dirty[tab] = true; return grid.appendRows(tab, rows); },
       writeRow: function (tab, i, row) { dirty[tab] = true; return grid.writeRow(tab, i, row); },
       /** Called by the store after its writes are on the Sheet (inside the lock): retire the old versions. */
-      commit: function () {
+      commit: function (full) {
         var names = Object.keys(dirty);
         if (!names.length) return;
-        var map = {};
+        var map = {}, current = {};
         loadVersions();
-        names.forEach(function (t) { versions[t] = newVersion(); map[vkey(t)] = versions[t]; });
+        // The writer holds the server lock here. If nobody else has written a tab since this
+        // request read it, the request knows the tab's exact new content and can cache it.
+        try { current = cache.getAll(names.map(vkey)) || {}; } catch (e) { current = {}; }
+        names.forEach(function (t) {
+          var untouched = readAt[t] && current[vkey(t)] === readAt[t];
+          versions[t] = newVersion(); map[vkey(t)] = versions[t];
+          if (full && full[t] && untouched) {
+            try { var json = JSON.stringify(full[t]); if (json.length <= MAX_CHARS) cache.put('d:' + t + ':' + versions[t], json, DATA_TTL); } catch (e) { /* optional */ }
+          }
+          readAt[t] = versions[t];
+        });
         dirty = {};
         try { cache.putAll(map, VERSION_TTL); } catch (e) { /* if this fails the data TTL still bounds staleness */ }
       }
@@ -715,8 +726,10 @@
     }
     function toArray(tab, headers, obj) { return headers.map(function (h) { return encode(tab, h, obj[h]); }); }
     function flush() {
+      var full = {};
       Object.keys(cache).forEach(function (tab) {
         var t = cache[tab];
+        var changed = t.pending.length || t.dirty.length;
         if (t.pending.length) {
           var arrays = t.pending.map(function (r) { return toArray(tab, t.headers, r); });
           var first = grid.appendRows ? grid.appendRows(tab, arrays) : null;
@@ -726,8 +739,17 @@
         }
         t.dirty.forEach(function (r) { if (r.__row > 0) grid.writeRow(tab, r.__row, toArray(tab, t.headers, r)); });
         t.dirty = [];
+        // For a tab this request has read in full, hand the cache its exact new content,
+        // so the next request does not have to read the Sheet again.
+        if (changed && t.rows && t.rows.every(function (r) { return r.__row > 0; })) {
+          var last = t.rows.reduce(function (m, r) { return Math.max(m, r.__row); }, 0), blank = t.headers.map(function () { return ''; });
+          var data = [t.headers.slice()];
+          for (var i = 1; i <= last; i++) data.push(blank);
+          t.rows.forEach(function (r) { data[r.__row] = toArray(tab, t.headers, r); });
+          full[tab] = data;
+        }
       });
-      if (grid.commit) grid.commit(); // retire cached copies of the tabs just written
+      if (grid.commit) grid.commit(full); // retire cached copies of the tabs just written
     }
     var db = {
       rows: function (tab) { return load(tab).rows; },
@@ -807,6 +829,9 @@
 
   /** Owner sets or resets a PIN. Returns the PIN once; only its salted hash is stored. */
   function setPin(ctx, actor, personId, pin) {
+    return ctx.env.withLock(function () { return setPinLocked(ctx, actor, personId, pin); });
+  }
+  function setPinLocked(ctx, actor, personId, pin) {
     if (actor.role !== 'owner') fail('FORBIDDEN', 'Only the owner can set a PIN.');
     if (!/^\d{4,6}$/.test(pin)) fail('BAD_PIN', 'PIN must be 4 to 6 digits.');
     var salt = ctx.env.randomId();
@@ -820,6 +845,9 @@
    * owner can approve. The device token is returned once; the server keeps only its hash.
    */
   function login(ctx, personId, pin, deviceToken, deviceLabel) {
+    return ctx.env.withLock(function () { return loginLocked(ctx, personId, pin, deviceToken, deviceLabel); });
+  }
+  function loginLocked(ctx, personId, pin, deviceToken, deviceLabel) {
     var p = find(ctx, 'People', personId);
     if (!p || p.active === false) fail('LOGIN', 'Wrong name or PIN.');
     if (p.pinLockedUntil && ctx.now < p.pinLockedUntil) fail('LOCKED', 'Too many wrong PINs. Try again in 15 minutes.');
@@ -853,6 +881,9 @@
   }
 
   function decideDevice(ctx, actor, deviceId, approve) {
+    return ctx.env.withLock(function () { return decideDeviceLocked(ctx, actor, deviceId, approve); });
+  }
+  function decideDeviceLocked(ctx, actor, deviceId, approve) {
     if (actor.role !== 'owner') fail('FORBIDDEN', 'Only the owner can approve a phone.');
     var dev = find(ctx, 'Devices', deviceId);
     if (!dev || dev.status !== 'pending') fail('NOT_FOUND', 'No such pending phone request.');

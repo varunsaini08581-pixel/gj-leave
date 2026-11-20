@@ -43,6 +43,9 @@
 
   /** Owner sets or resets a PIN. Returns the PIN once; only its salted hash is stored. */
   function setPin(ctx, actor, personId, pin) {
+    return ctx.env.withLock(function () { return setPinLocked(ctx, actor, personId, pin); });
+  }
+  function setPinLocked(ctx, actor, personId, pin) {
     if (actor.role !== 'owner') fail('FORBIDDEN', 'Only the owner can set a PIN.');
     if (!/^\d{4,6}$/.test(pin)) fail('BAD_PIN', 'PIN must be 4 to 6 digits.');
     var salt = ctx.env.randomId();
@@ -56,6 +59,9 @@
    * owner can approve. The device token is returned once; the server keeps only its hash.
    */
   function login(ctx, personId, pin, deviceToken, deviceLabel) {
+    return ctx.env.withLock(function () { return loginLocked(ctx, personId, pin, deviceToken, deviceLabel); });
+  }
+  function loginLocked(ctx, personId, pin, deviceToken, deviceLabel) {
     var p = find(ctx, 'People', personId);
     if (!p || p.active === false) fail('LOGIN', 'Wrong name or PIN.');
     if (p.pinLockedUntil && ctx.now < p.pinLockedUntil) fail('LOCKED', 'Too many wrong PINs. Try again in 15 minutes.');
@@ -89,6 +95,9 @@
   }
 
   function decideDevice(ctx, actor, deviceId, approve) {
+    return ctx.env.withLock(function () { return decideDeviceLocked(ctx, actor, deviceId, approve); });
+  }
+  function decideDeviceLocked(ctx, actor, deviceId, approve) {
     if (actor.role !== 'owner') fail('FORBIDDEN', 'Only the owner can approve a phone.');
     var dev = find(ctx, 'Devices', deviceId);
     if (!dev || dev.status !== 'pending') fail('NOT_FOUND', 'No such pending phone request.');

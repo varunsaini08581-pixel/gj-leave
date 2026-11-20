@@ -106,8 +106,10 @@
     }
     function toArray(tab, headers, obj) { return headers.map(function (h) { return encode(tab, h, obj[h]); }); }
     function flush() {
+      var full = {};
       Object.keys(cache).forEach(function (tab) {
         var t = cache[tab];
+        var changed = t.pending.length || t.dirty.length;
         if (t.pending.length) {
           var arrays = t.pending.map(function (r) { return toArray(tab, t.headers, r); });
           var first = grid.appendRows ? grid.appendRows(tab, arrays) : null;
@@ -117,8 +119,17 @@
         }
         t.dirty.forEach(function (r) { if (r.__row > 0) grid.writeRow(tab, r.__row, toArray(tab, t.headers, r)); });
         t.dirty = [];
+        // For a tab this request has read in full, hand the cache its exact new content,
+        // so the next request does not have to read the Sheet again.
+        if (changed && t.rows && t.rows.every(function (r) { return r.__row > 0; })) {
+          var last = t.rows.reduce(function (m, r) { return Math.max(m, r.__row); }, 0), blank = t.headers.map(function () { return ''; });
+          var data = [t.headers.slice()];
+          for (var i = 1; i <= last; i++) data.push(blank);
+          t.rows.forEach(function (r) { data[r.__row] = toArray(tab, t.headers, r); });
+          full[tab] = data;
+        }
       });
-      if (grid.commit) grid.commit(); // retire cached copies of the tabs just written
+      if (grid.commit) grid.commit(full); // retire cached copies of the tabs just written
     }
     var db = {
       rows: function (tab) { return load(tab).rows; },
