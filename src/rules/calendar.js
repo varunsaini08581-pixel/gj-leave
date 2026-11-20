@@ -23,9 +23,21 @@
   function isRosterOff(person, d) {
     var n = nthSunday(d);
     if (!n) return false;
-    if (person.sundayOff === 'every') return true;
-    return Array.isArray(person.sundayOff) && person.sundayOff.indexOf(n) !== -1;
+    var off = asOn(person, d).sundayOff;
+    if (off === 'every') return true;
+    return Array.isArray(off) && off.indexOf(n) !== -1;
   }
+  /**
+   * A person's Sunday roster and active state as they were on a day. person.history holds what was
+   * true "until" a date whenever Settings changed it: [{ until, sundayOff, active }], oldest first.
+   * A change in Settings therefore never re-judges days that are already gone.
+   */
+  function asOn(person, d) {
+    var h = person && person.history;
+    if (Array.isArray(h)) for (var i = 0; i < h.length; i++) if (h[i] && d <= h[i].until) return h[i];
+    return person || {};
+  }
+  function wasActive(person, d) { return asOn(person, d).active !== false; }
 
   function rosterSundaysInMonth(person, key) {
     var out = [];
@@ -51,7 +63,7 @@
     return out;
   }
 
-  var api = { isDate: isDate, isTime: isTime, addDays: addDays, weekday: weekday, monthKey: monthKey, daysInMonth: daysInMonth,
+  var api = { asOn: asOn, wasActive: wasActive, isDate: isDate, isTime: isTime, addDays: addDays, weekday: weekday, monthKey: monthKey, daysInMonth: daysInMonth,
     nthSunday: nthSunday, isRosterOff: isRosterOff, rosterSundaysInMonth: rosterSundaysInMonth, dateRange: dateRange };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJCalendar = api;

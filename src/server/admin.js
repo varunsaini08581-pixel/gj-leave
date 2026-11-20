@@ -129,7 +129,10 @@
       var person = H.find(ctx, 'People', r.personId);
       if (ctx.now >= Core.toMs(r.dates[0], r.kind === 'half' ? r.halfStart : person.dutyStart) && actor.role === 'staff') H.fail('FORBIDDEN', 'This leave has started. Ask Aakash or Varun.');
       // A recorded phone call keeps its time when Aakash or Varun corrects the entry for the same first day.
-      var keep = r.noticeAt && actor.role !== 'staff' && (input.dates || []).slice().sort()[0] === r.dates[0] ? { at: r.noticeAt } : null;
+      // The notice for the first day was given when the request was first sent (or when the recorded call was made).
+      // Changing the end, the reason or the kind does not make that day a late request.
+      var sameStart = Array.isArray(input.dates) && input.dates.slice().sort()[0] === r.dates[0];
+      var keep = sameStart ? { at: r.noticeAt || r.submittedAt } : null;
       var ev = H.evaluate(ctx, person, input, id, keep);
       if (ev.decision === 'blocked') H.fail('BLOCKED', ev.reasons.join(' '));
       // Handoff Part 6: an edit after approval goes back to pending. It is never approved again by the system.
@@ -161,8 +164,9 @@
       need(input.overrideReason, 'Write the reason for the override.');
       var person = H.find(ctx, 'People', input.forPersonId);
       if (!person) H.fail('NOT_FOUND', 'No such person.');
-      var dates = (input.dates || []).slice().sort();
+      var dates = (Array.isArray(input.dates) ? input.dates : []).filter(function (d, i, a) { return a.indexOf(d) === i; }).sort();
       if (!dates.length || !/^(full|half)$/.test(input.kind) || !dates.every(Cal.isDate)) H.fail('BLOCKED', 'Pick exact dates.');
+      if (dates.some(function (d, i) { return i && Cal.addDays(dates[i - 1], 1) !== d; })) H.fail('BLOCKED', 'Dates in one request must be consecutive.');
       if (input.kind === 'half' && (dates.length !== 1 || !Cal.isTime(input.halfStart))) H.fail('BLOCKED', 'A half day is one date with a start time.');
       H.assertOpen(ctx, dates);
       H.assertOpen(ctx, dates);
@@ -184,7 +188,10 @@
   // ---------- Settings ----------
 
   var PERSON_FIELDS = ['name', 'group', 'role', 'dutyStart', 'dutyEnd', 'sundayOff', 'noApproval', 'noClash', 'noQuota', 'dressExempt', 'active', 'email', 'phone'];
+  function flag(v, name) { if (!(v === true || v === false || v === '' || v === undefined)) H.fail('BLOCKED', name + ' must be yes or no.'); }
   function validPerson(p) {
+    ['noApproval', 'noClash', 'noQuota', 'dressExempt', 'active'].forEach(function (f) { flag(p[f], f); });
+    if (typeof p.name !== 'string' || typeof p.group !== 'string' && p.group !== undefined) H.fail('BLOCKED', 'Name and group must be text.');
     if (!String(p.name || '').trim()) H.fail('BLOCKED', 'Name is required.');
     if (!Cal.isTime(p.dutyStart) || !Cal.isTime(p.dutyEnd) || p.dutyEnd <= p.dutyStart) H.fail('BLOCKED', 'Duty times must be HH:MM and the end after the start.');
     if (['staff', 'manager', 'owner'].indexOf(p.role) === -1) H.fail('BLOCKED', 'Role must be staff, manager or owner.');
@@ -215,6 +222,14 @@
         var losesOwner = existing.role === 'owner' && existing.active !== false && (clean.role !== 'owner' || clean.active === false);
         if (losesOwner && ctx.db.rows('People').filter(function (x) { return x.role === 'owner' && x.active !== false; }).length < 2) H.fail('BLOCKED', 'There must always be one active owner.');
         if (existing.name !== clean.name) renameEverywhere(ctx, actor, existing.name, clean.name);
+        // The roster and the active state as they were until yesterday are kept, so days already gone are
+        // never judged again by what Settings say from today on.
+        var changed = JSON.stringify(existing.sundayOff) !== JSON.stringify(clean.sundayOff) || (existing.active !== false) !== (clean.active !== false);
+        if (changed) {
+          var past = Array.isArray(existing.history) ? existing.history.slice() : [], until = Cal.addDays(H.today(ctx), -1);
+          if (!past.length || past[past.length - 1].until < until) past.push({ until: until, sundayOff: existing.sundayOff, active: existing.active !== false });
+          clean.history = past;
+        }
         var before = {}; PERSON_FIELDS.forEach(function (f) { before[f] = existing[f]; });
         ctx.db.update('People', p.id, clean);
         H.audit(ctx, actor.id, 'people.update', p.id, { before: before, after: clean });
@@ -243,19 +258,48 @@
     });
   }
 
+  /**
+   * Handoff 3.3: when a rule is added or switched on later, a leave that now clashes is marked
+   * "Rejected – clash": the one approved LAST gives way, the first approved keeps the slot. Only days
+   * from today on, never Varun's overrides. Both people, Aakash and Varun are told.
+   */
+  function recheckClashes(ctx, actor) {
+    var Clash = (typeof require !== 'undefined') ? require('../rules/clash.js') : root.GJClash;
+    var today = H.today(ctx), out = [];
+    ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Approved' && r.route !== 'override' && r.route !== 'system' && r.dates.some(function (d) { return d >= today; }); })
+      .sort(function (a, b) { return (b.decidedAt || 0) - (a.decidedAt || 0); })
+      .forEach(function (r) {
+        var person = H.find(ctx, 'People', r.personId);
+        if (!person) return;
+        var clash = Clash.checkRequest({ person: person.name, dates: r.dates.filter(function (d) { return d >= today; }), extremeEmergency: r.extremeEmergency }, H.peopleMap(ctx), H.approvedAway(ctx, r.id), H.rules(ctx));
+        if (clash.ok) return;
+        ctx.db.update('LeaveRequests', r.id, { status: 'Rejected – clash', decisionReason: clash.blocks[0].message, decidedAt: ctx.now, decidedBy: 'system',
+          history: r.history.concat([{ at: ctx.now, by: actor.id, action: 'rejected – clash (rule changed)' }]) });
+        H.withdrawViolations(ctx, r.id, 'Rejected – clash');
+        H.notify(ctx, r.personId, 'clash', 'Leave: Rejected – clash', H.niceDates(r.dates) + ' \u2014 a clash rule was changed. ' + clash.blocks[0].message, r.id);
+        H.byRole(ctx, 'manager').concat(H.byRole(ctx, 'owner')).forEach(function (m) { H.notify(ctx, m.id, 'clash', 'Rejected – clash', person.name + ': ' + clash.blocks[0].message, r.id); });
+        var holders = {}; clash.blocks.forEach(function (b) { (b.who || []).forEach(function (w) { holders[w] = 1; }); });
+        Object.keys(holders).forEach(function (name) { var h = H.peopleMap(ctx)[name]; if (h) H.notify(ctx, h.id, 'clash', 'A clashing leave was rejected', person.name + ' had ' + H.niceDates(r.dates) + '. Your approved time off keeps the slot.', r.id); });
+        out.push(r.id);
+      });
+    return out;
+  }
   function saveRule(ctx, actor, r) {
     return ctx.env.withLock(function () {
       owner(actor);
       var names = ctx.db.rows('People').map(function (p) { return p.name; });
       if (!Array.isArray(r.members) || r.members.length < 2 || !r.members.every(function (m) { return names.indexOf(m) !== -1; })) H.fail('BLOCKED', 'Choose at least 2 people.');
       if (!(r.minPresent >= 1 && r.minPresent < r.members.length)) H.fail('BLOCKED', 'Minimum present must be between 1 and one less than the group size.');
+      var e = r.emergencyIfAllPresent, x = r.rosterSundayException;
+      if (!(e === null || e === undefined || e === '' || (Array.isArray(e) && e.every(function (m) { return names.indexOf(m) !== -1; })))) H.fail('BLOCKED', 'The extreme-emergency list must be people from the list.');
+      if (!(x === null || x === undefined || x === '' || (Array.isArray(x) && x.every(function (n) { return n >= 1 && n <= 5; })))) H.fail('BLOCKED', 'The Sunday exception must be Sunday numbers 1 to 5.');
       var clean = { on: r.on !== false, label: String(r.label || '').trim() || r.id, members: r.members, minPresent: +r.minPresent,
         rosterSundayException: r.rosterSundayException || null, emergencyIfAllPresent: r.emergencyIfAllPresent || null };
-      if (r.id && H.find(ctx, 'Rules', r.id)) { ctx.db.update('Rules', r.id, clean); H.audit(ctx, actor.id, 'rules.update', r.id, clean); return { id: r.id }; }
+      if (r.id && H.find(ctx, 'Rules', r.id)) { ctx.db.update('Rules', r.id, clean); H.audit(ctx, actor.id, 'rules.update', r.id, clean); return { id: r.id, rejected: recheckClashes(ctx, actor) }; }
       var id = 'C' + (ctx.db.rows('Rules').length + 1) + '-' + ctx.env.randomId().slice(0, 3);
       ctx.db.insert('Rules', Object.assign({ id: id }, clean));
       H.audit(ctx, actor.id, 'rules.create', id, clean);
-      return { id: id };
+      return { id: id, rejected: recheckClashes(ctx, actor) };
     });
   }
 
@@ -273,7 +317,11 @@
       if (Array.isArray(r.appliesTo) && !r.appliesTo.every(function (n) { return known.indexOf(n) !== -1; })) H.fail('BLOCKED', 'Choose people from the list.');
       need(r.note, 'Write a note, for example "Peak sales season".');
       if (r.rule !== 'no-leave' && r.rule !== 'violation') H.fail('BLOCKED', 'Choose the rule.');
-      var clean = { from: r.from, to: r.to, note: String(r.note).trim(), rule: r.rule, appliesTo: Array.isArray(r.appliesTo) && r.appliesTo.length ? r.appliesTo : null, on: r.on !== false };
+      var usual = ctx.db.rows('People').filter(function (p) { return p.active !== false && p.role === 'staff' && !p.noClash; }).map(function (p) { return p.name; }).sort();
+      var list = Array.isArray(r.appliesTo) && r.appliesTo.length ? r.appliesTo.slice().sort() : null;
+      // The usual ticks (everyone except Anita and Muskan) are stored as "the default", so a person who joins later is covered too.
+      if (list && JSON.stringify(list) === JSON.stringify(usual)) list = null;
+      var clean = { from: r.from, to: r.to, note: String(r.note).trim(), rule: r.rule, appliesTo: list, on: r.on !== false };
       if (old) { ctx.db.update('Restrictions', r.id, clean); H.audit(ctx, actor.id, 'restrictions.update', r.id, clean); return { id: r.id }; }
       var id = 'R' + ctx.env.randomId().slice(0, 6);
       ctx.db.insert('Restrictions', Object.assign({ id: id, createdBy: actor.id, createdAt: ctx.now }, clean));
@@ -298,6 +346,22 @@
       if (key === 'closedDays') { var was = H.closedSet(ctx); added = value.filter(function (d) { return !was[d]; }); }
       putSetting(ctx, actor, key, value);
       // The shop was closed on a day that the evening job had already marked: those absences are withdrawn.
+      var touched = {};
+      added.forEach(function (d) {
+        ctx.db.rows('DayMinutes').forEach(function (m) {
+          if (m.date !== d || !(m.minutes > 0)) return;
+          ctx.db.update('DayMinutes', m.id, { minutes: 0, note: 'Shop closed that day' });
+          touched[m.personId + '|' + Cal.monthKey(d)] = [m.personId, Cal.monthKey(d)];
+        });
+        ctx.db.rows('LeaveRequests').forEach(function (r) {
+          if (H.GRANTED[r.status] && r.dates.every(function (x) { return H.closedSet(ctx)[x]; })) H.withdrawViolations(ctx, r.id, 'Shop closed that day');
+          if (r.type === 'Emergency' && r.dates.indexOf(d) !== -1) touched[r.personId + '|' + Cal.monthKey(r.dates[0]) + '|e'] = [r.personId, Cal.monthKey(r.dates[0]), true];
+        });
+      });
+      Object.keys(touched).forEach(function (k) {
+        if (touched[k][2]) H.renumberEmergencies(ctx, touched[k][0], touched[k][1]);
+        else if (H.hooks.syncViolations) H.hooks.syncViolations(ctx, touched[k][0], touched[k][1]);
+      });
       added.forEach(function (d) {
         ctx.db.rows('LeaveRequests').forEach(function (r) {
           if (r.route !== 'system' || r.dates.indexOf(d) === -1 || r.status === 'Cancelled') return;

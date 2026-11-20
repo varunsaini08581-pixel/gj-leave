@@ -69,6 +69,7 @@
         minutes = a.kind === 'late' ? t - s : e - t;
       }
       if (!(minutes > 0)) return { counted: 0, lines: [] };
+      if (a.date !== undefined && a.date !== '' && !(typeof a.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(a.date))) throw err('BLOCKED', 'Pick an exact date.');
       return Att.effectOf(ctx, actor.id, a.kind, minutes, a.date);
     },
     decideShort: function (ctx, actor, a) { return Att.decideShort(ctx, actor, a.id, !!a.approve, a.reason); },
@@ -109,6 +110,7 @@
       // A staff member sees only their own month. Aakash and Varun may open anyone's.
       var personId = a.personId || actor.id;
       if (personId !== actor.id && actor.role === 'staff') throw err('FORBIDDEN', 'You can see only your own page.');
+      if (typeof personId !== 'string' || !ctx.db.rows('People').some(function (p) { return p.id === personId; })) throw err('NOT_FOUND', 'No such person.');
       var m = Att.myMonth(ctx, personId, a.month), items = {};
       Admin.graceTable(ctx).forEach(function (g) { items['manual:' + g.key] = g.item; });
       // A violation is shown with its plain name and, when Aakash recorded it, his note: the person must know what to dispute.

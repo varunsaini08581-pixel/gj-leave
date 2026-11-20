@@ -58,10 +58,13 @@
     var names = {}; ctx.db.rows('People').forEach(function (p) { names[p.id] = p.name; });
     ctx.db.rows('LeaveRequests').forEach(function (r) {
       if (!H.OPEN[r.status]) return;
+      var asker = H.find(ctx, 'People', r.personId);
+      if (!asker || asker.active === false) return; // the person has left: nothing to remind about
       var last = r.remindedAt || r.submittedAt;
       if (ctx.now - last < gap) return;
       var who = [];
-      if (r.route === 'aakash' || (r.route === 'special' && r.approvals.aakash !== 'yes')) who = who.concat(H.byRole(ctx, 'manager'));
+      if (r.route === 'aakash') who = who.concat(H.deciders(ctx)); // Varun too while Aakash is on leave
+      if (r.route === 'special' && r.approvals.aakash !== 'yes') who = who.concat(H.byRole(ctx, 'manager'));
       if (r.route === 'varun' || (r.route === 'special' && r.approvals.varun !== 'yes')) who = who.concat(H.byRole(ctx, 'owner'));
       who.forEach(function (m) { H.notify(ctx, m.id, 'reminder', 'Reminder: leave request waiting', names[r.personId] + ': ' + H.niceDates(r.dates), r.id); });
       ctx.db.update('LeaveRequests', r.id, { remindedAt: ctx.now });

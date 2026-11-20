@@ -8,7 +8,7 @@
 
   var TABS = {
     People: ['id', 'name', 'group', 'role', 'dutyStart', 'dutyEnd', 'sundayOff', 'noApproval', 'noClash', 'noQuota',
-      'dressExempt', 'active', 'email', 'phone', 'pinSalt', 'pinHash', 'pinTries', 'pinLockedUntil', 'pinLockLevel', 'joinedOn'],
+      'dressExempt', 'active', 'email', 'phone', 'pinSalt', 'pinHash', 'pinTries', 'pinLockedUntil', 'pinLockLevel', 'joinedOn', 'history'],
     Devices: ['id', 'personId', 'tokenHash', 'label', 'status', 'requestedAt', 'decidedAt', 'decidedBy', 'pinTries', 'pinLockedUntil', 'pinLockLevel', 'signedOut'],
     PayInfo: ['personId', 'fixedSalary', 'targetAllowance', 'disciplineBonus', 'dutyHours', 'updatedAt', 'updatedBy'],
     Rules: ['id', 'on', 'label', 'members', 'minPresent', 'rosterSundayException', 'emergencyIfAllPresent'],
@@ -32,7 +32,7 @@
   };
 
   var JSON_COLS = {
-    People: ['sundayOff'], Rules: ['members', 'rosterSundayException', 'emergencyIfAllPresent'],
+    People: ['sundayOff', 'history'], Rules: ['members', 'rosterSundayException', 'emergencyIfAllPresent'],
     Restrictions: ['appliesTo'], LeaveRequests: ['dates', 'approvals', 'history'], Punches: ['dress'], MonthSheet: ['result'], Audit: ['detail']
   };
 
@@ -45,7 +45,7 @@
   var BOOL_COLS = ['noApproval', 'noClash', 'noQuota', 'dressExempt', 'active', 'on', 'extremeEmergency', 'penaltyEmergency',
     'restrictionViolation', 'informed', 'signedOut'];
 
-  var SCHEMA_VERSION = 3;
+  var SCHEMA_VERSION = 4;
   // Tabs added after the first version: an older Sheet may rightly not have them yet. Every other
   // missing tab on a Sheet that is in use means a tab was renamed or deleted by hand.
   var TAB_SINCE = { Thumbs: 2 };
