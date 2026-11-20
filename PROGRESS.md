@@ -56,15 +56,27 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Privacy test: no reply to a staff member contains salary, PIN hash, token hash or another person's reason.
 - Tests: 53 of 53 pass.
 
+### 20 Nov 2026, 16:35 run - attendance
+- `src/server/attendance.js`: informed late / early requests, check-in / check-out (server time, late and early minutes worked out automatically, half-day aware), going out (request, Aakash approves, I'm back, confirm, correct back time with log, remind), month calculation, violation sync into the Violations tab (never deletes; a dropped one is marked removed), "My month" data with the working lines and the estimate label, end-of-day absent job, humanitarian excuse.
+- Check-in distance from the shop point (flag above 50 m; flag when no location). Photo, stamp and dress check come later (Phase 5).
+- New tabs: ShortRequests, Outings.
+- Karan example verified end to end through real check-ins: Rs 126, 1 violation, record only.
+- Tests: 70 of 70 pass.
+
 ## Assumptions made in code (to show the owner together, not blocking)
-1. Per-day clash also covers "Going out". Flagged to the owner twice, no objection.
-2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested. If Aakash rejects it, no violation from that request.
-3. Reason list on the form: Sick, Family function, Family emergency, Personal work, Travel, Exam, Other (+ free text always required). The handoff says "from a list" but gives no list.
-4. One request = consecutive dates only. Non-consecutive days need separate requests.
+1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
+2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
+3. Reason list on the form: Sick, Family function, Family emergency, Personal work, Travel, Exam, Other (+ free text always required).
+4. One request = consecutive dates only.
 5. PIN is 4 to 6 digits.
+6. Late / early requests need no approval (the handoff only says "applied in the app"). Aakash gets a notification.
+7. Going-out time is counted from Aakash's APPROVAL time to the staff member's "I'm back" tap.
+8. Leaving before the stated early time: the minutes before the stated time are "not informed" (mirror of the late rule).
+9. A day with more than 2 hours away becomes a half day (0.5 leave) automatically, more than 4 h 30 min a full day. It is counted in the quota only; no violation and no emergency count is added for it.
+10. Absent with no request: counted as 1 leave day + 1 violation. Muskan: recorded only. Aakash and Varun are not tracked.
+11. Shop-closed days are read from Settings `closedDays`; no screen for it yet.
 
 ## Next
 - NEEDS OWNER'S CHROME: create test Sheet "GJ Leave - TEST", Extensions > Apps Script, paste `apps-script/Code.js`, run `setupOrUpgrade`, deploy as web app, Google "Allow".
-- Short leave / late / early / going-out requests and check-in/out in the server core (uses `minutes.js`), "My month" data.
-- Absent-with-no-request end-of-day job, edit-after-approval, 12-person month simulation.
-- First phone screens (login, apply form with live result, pending list).
+- Phone screens in `web/`: login, home (check-in/out, going out), apply form with live result, My month, Aakash pending list.
+- Edit-after-approval (back to pending, re-check), manual violations by Aakash with grace table, disputes (24 h), settings API, month lock, 12-person month simulation, email alerts + 2-hour reminder trigger.

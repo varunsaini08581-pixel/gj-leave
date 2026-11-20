@@ -129,6 +129,13 @@
       r.dates.forEach(function (d) { out.push({ person: names[r.personId], date: d, kind: r.kind }); });
     });
     ctx.db.rows('DayMinutes').forEach(function (m) { out.push({ person: names[m.personId], date: m.date, kind: m.kind }); });
+    // Planned late/early and approved outings also make a person "away" that day.
+    ctx.db.rows('ShortRequests').forEach(function (q) {
+      if (q.status === 'Active' && q.id !== exceptId) out.push({ person: names[q.personId], date: q.date, kind: q.kind });
+    });
+    ctx.db.rows('Outings').forEach(function (o) {
+      if (o.id !== exceptId && (o.status === 'Approved' || o.status === 'Back' || o.status === 'Confirmed')) out.push({ person: names[o.personId], date: o.date, kind: 'out' });
+    });
     return out;
   }
 
@@ -335,7 +342,9 @@
   }
 
   var api = { REASONS: REASONS, setPin: setPin, login: login, decideDevice: decideDevice, authenticate: authenticate,
-    previewLeave: previewLeave, submitLeave: submitLeave, decideLeave: decideLeave, cancelLeave: cancelLeave, toMs: toMs };
+    previewLeave: previewLeave, submitLeave: submitLeave, decideLeave: decideLeave, cancelLeave: cancelLeave, toMs: toMs,
+    _: { fail: fail, find: find, audit: audit, notify: notify, byRole: byRole, today: today, peopleMap: peopleMap, rules: rules,
+      approvedAway: approvedAway, liveLeaves: liveLeaves, IST_OFFSET_MS: IST_OFFSET_MS } };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJCore = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -9,6 +9,7 @@
 (function (root) {
   'use strict';
   var Core = (typeof require !== 'undefined') ? require('./core.js') : root.GJCore;
+  var Att = (typeof require !== 'undefined') ? require('./attendance.js') : root.GJAttendance;
 
   var MIN_CLIENT_VERSION = 1; // version gate: an old cached app must update before it can do anything
 
@@ -50,6 +51,21 @@
       if (actor.role === 'staff') throw err('FORBIDDEN', 'Only Aakash or Varun.');
       var names = nameMap(ctx);
       return ctx.db.rows('LeaveRequests').filter(function (r) { return /^(Pending|Special)/.test(r.status); }).map(function (r) { return leaveView(r, names, actor); });
+    },
+    requestShort: function (ctx, actor, a) { return Att.requestShort(ctx, actor, a); },
+    checkIn: function (ctx, actor, a) { return Att.checkIn(ctx, actor, a); },
+    checkOut: function (ctx, actor) { return Att.checkOut(ctx, actor); },
+    goingOut: function (ctx, actor, a) { return Att.goingOut(ctx, actor, a); },
+    decideOuting: function (ctx, actor, a) { return Att.decideOuting(ctx, actor, a.id, !!a.approve, a.reason); },
+    imBack: function (ctx, actor, a) { return Att.imBack(ctx, actor, a.id); },
+    confirmBack: function (ctx, actor, a) { return Att.confirmBack(ctx, actor, a.id, a.correctedTime); },
+    remindBack: function (ctx, actor, a) { return Att.remindBack(ctx, actor, a.id); },
+    excuseAbsence: function (ctx, actor, a) { return Att.excuseAbsence(ctx, actor, a.id, a.reason); },
+    myMonth: function (ctx, actor, a) {
+      // A staff member sees only their own month. Aakash and Varun may open anyone's.
+      var personId = a.personId || actor.id;
+      if (personId !== actor.id && actor.role === 'staff') throw err('FORBIDDEN', 'You can see only your own page.');
+      return Att.myMonth(ctx, personId, a.month);
     },
     setPin: function (ctx, actor, a) { return Core.setPin(ctx, actor, a.personId, a.pin); },
     devices: function (ctx, actor) {

@@ -126,6 +126,15 @@ test('API privacy: no reply to a staff member ever contains salary, PIN or token
   assert.equal(a.call(a.t, 'setPin', a.aakash, { personId: 'neha', pin: '0000' }).code, 'FORBIDDEN');
 });
 
+test('API privacy: a staff member cannot open another person\u2019s month page', () => {
+  const a = apiWorld();
+  a.w.ctx(...a.t).db.insert('PayInfo', { personId: 'vikas', fixedSalary: 17000, targetAllowance: 2000, disciplineBonus: 500, dutyHours: 9 });
+  assert.equal(a.call(a.t, 'myMonth', a.neha, { personId: 'vikas', month: '2026-11' }).code, 'FORBIDDEN');
+  assert.equal(a.call(a.t, 'myMonth', a.neha, { month: '2026-11' }).data.name, 'Neha');
+  assert.equal(a.call(a.t, 'myMonth', a.aakash, { personId: 'vikas', month: '2026-11' }).data.name, 'Vikas');
+  assert.equal(a.call(a.t, 'checkIn', a.neha, {}).ok, true);
+});
+
 test('API: full flow through the dispatcher', () => {
   const a = apiWorld();
   const r = a.call(['2026-11-24', '12:00'], 'submitLeave', a.neha, leave(['2026-11-25']));
@@ -141,7 +150,7 @@ test('the Apps Script bundle builds and loads with every module wired', () => {
   const code = fs.readFileSync(path.join(__dirname, '..', 'apps-script', 'Code.js'), 'utf8');
   const sandbox = {}; sandbox.globalThis = sandbox;
   vm.runInNewContext(code, sandbox);
-  ['GJCalendar', 'GJClash', 'GJLeave', 'GJMinutes', 'GJSchema', 'GJStore', 'GJCore', 'GJApi'].forEach(n => assert.ok(sandbox[n], n));
+  ['GJCalendar', 'GJClash', 'GJLeave', 'GJMinutes', 'GJSchema', 'GJStore', 'GJCore', 'GJAttendance', 'GJApi'].forEach(n => assert.ok(sandbox[n], n));
   ['doPost', 'doGet', 'setupOrUpgrade'].forEach(n => assert.equal(typeof sandbox[n], 'function', n));
   // The bundle works without require(): run setup + a call inside the sandbox on a fake grid.
   const g = fakeGrid();
