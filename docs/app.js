@@ -2,7 +2,12 @@
 (function () {
   'use strict';
   var CFG = window.GJ_CONFIG || {};
-  var DEMO = !CFG.API_URL || /[?&]demo=1/.test(location.search);
+  var CLIENT_VERSION = 1; // goes up when the server must refuse older copies of this file (server: MIN_CLIENT_VERSION)
+  // Demo mode (sample data inside the phone, nothing saved) only when the address asks for it.
+  // If the settings file did not arrive, the app stops: it must never quietly turn into a demo.
+  var DEMO = /[?&]demo=1/.test(location.search);
+  var BROKEN = !DEMO && !CFG.API_URL;
+  function once(key) { try { if (sessionStorage.getItem(key)) return false; sessionStorage.setItem(key, '1'); return true; } catch (e) { return false; } }
   var app = document.getElementById('app'), tabsEl = document.getElementById('tabs'), toastEl = document.getElementById('toast');
   var state = { me: null, tab: 'home', session: loadSession(), badge: 0 };
 
@@ -34,9 +39,10 @@
     return state.session.personId === personId ? (state.session.deviceToken || null) : null;
   }
   function signOut() {
+    // The server is told first: after this the phone's token opens nothing until the PIN is entered again.
+    var done = state.session.deviceToken ? api('signOut').catch(function () {}) : Promise.resolve();
     if (state.session.deviceToken) saveDevice({ personId: state.session.personId, deviceToken: state.session.deviceToken });
-    saveSession({ personId: state.session.personId });
-    state.me = null;
+    return done.then(function () { saveSession({ personId: state.session.personId }); state.me = null; });
   }
   function saveSession(s) { state.session = s; try { localStorage.setItem(DEMO ? 'gjleave.demo' : 'gjleave.session', JSON.stringify(s)); } catch (e) { /* stays in memory */ } }
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -54,13 +60,18 @@
 
   // ---------- API ----------
   function api(action, args) {
-    var body = { action: action, args: args || {}, clientVersion: CFG.CLIENT_VERSION, personId: state.session.personId, deviceToken: state.session.deviceToken };
+    var body = { action: action, args: args || {}, clientVersion: CLIENT_VERSION, personId: state.session.personId, deviceToken: state.session.deviceToken };
     var call = DEMO ? Promise.resolve().then(function () { return window.GJMock.handle(body); })
       : fetch(CFG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) }).then(function (r) { return r.json(); });
     return call.then(function (res) {
       if (res.ok) return res.data;
       if (res.code === 'AUTH') { state.me = null; viewLogin(); }
-      if (res.code === 'UPDATE') { location.reload(); }
+      if (res.code === 'UPDATE') {
+        // One reload fetches the new files. If the same old files come back, stop and say so: never a reload loop.
+        if (once('gjleave.reloaded')) location.replace(location.origin + location.pathname + '?u=' + Date.now());
+        else res.message = 'This copy of the app is old. Close the app completely and open it again. If it stays, tell Varun.';
+      }
+      if (res.code === 'UNKNOWN') res.message = 'The app is newer than the server. Please tell Varun. (code UNKNOWN)';
       var e = new Error(res.message); e.code = res.code; throw e;
     }, function () { var e = new Error('No connection. Please try again.'); e.code = 'NET'; throw e; });
   }
@@ -410,7 +421,7 @@
     }
     if (window.GJMenu) cards.push(window.GJMenu());
     cards.push(h('div', { class: 'card' }, [h('h2', {}, 'Account'), h('p', {}, state.me.name + ' · ' + state.me.group),
-      h('div', { class: 'btns' }, button('Sign out', 'danger', function () { signOut(); viewLogin(); }))]));
+      h('div', { class: 'btns' }, button('Sign out', 'danger', function () { return signOut().then(viewLogin); }))]));
     show(cards);
   };
 
@@ -421,5 +432,6 @@
   window.GJApp = { h: h, show: show, toast: toast, api: api, run: run, button: button, state: state, VIEWS: VIEWS, go: go, drawTabs: drawTabs,
     niceDate: niceDate, niceDates: niceDates, timeOf: timeOf, todayStr: todayStr, addDays: addDays, statusChip: statusChip, MON: MON, RULE_TEXT: RULE_TEXT, position: position };
   function boot() { if (state.session.deviceToken) start(); else viewLogin(); }
-  if (DEMO) { var s = document.createElement('script'); s.src = 'mock-server.js'; s.onload = boot; document.body.appendChild(s); } else boot();
+  if (BROKEN) show([h('h1', {}, 'GJ Leave & Attendance'), h('div', { class: 'card' }, [h('p', {}, 'The app could not load completely. Check your internet connection, close the app and open it again.'), h('p', { class: 'muted' }, 'Nothing was saved. If this stays, tell Varun.')])]);
+  else if (DEMO) { var s = document.createElement('script'); s.src = 'mock-server.js'; s.onload = boot; document.body.appendChild(s); } else boot();
 })();

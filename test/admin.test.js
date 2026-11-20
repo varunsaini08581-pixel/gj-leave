@@ -79,6 +79,10 @@ test('edit: a violation earned by the old version is withdrawn', () => {
   Core.decideLeave(c, aakash, r.id, true);
   assert.equal(Att.myMonth(c, 'neha', '2026-11').violations.length, 1);
   Admin.editLeave(c, aakash, r.id, leave(['2026-11-30']));
+  // The old violation stands while the new version waits (so "no violation this month" cannot be
+  // bought with an edit); it goes when the new version is decided.
+  assert.equal(Att.myMonth(c, 'neha', '2026-11').violations.length, 1);
+  Core.decideLeave(c, aakash, r.id, true);
   assert.equal(Att.myMonth(c, 'neha', '2026-11').violations.length, 0);
 });
 

@@ -17,7 +17,8 @@
   'use strict';
   var DATA_TTL = 600;       // 10 minutes
   var VERSION_TTL = 21600;  // 6 hours (the longest Apps Script allows)
-  var MAX_CHARS = 95000;    // one cache value may hold 100 KB
+  var MAX_CHARS = 90000;    // one cache value may hold 100 KB; a bigger tab is kept in several pieces
+  var MAX_PIECES = 12;      // about 1 MB of text per tab; beyond that the tab is read from the Sheet
 
   function wrap(grid, cache, tabNames, newVersion) {
     var versions = null, dirty = {}, readAt = {};
@@ -36,13 +37,35 @@
       return versions;
     }
     function dkey(tab) { return 'd:' + tab + ':' + (loadVersions()[tab] || 'x'); }
+    /** Store a tab's text under key; a long text goes in numbered pieces with a small index entry. */
+    function putText(key, json) {
+      try {
+        if (json.length <= MAX_CHARS) { cache.put(key, json, DATA_TTL); return; }
+        var n = Math.ceil(json.length / MAX_CHARS);
+        if (n > MAX_PIECES) return; // too big to keep: it is read from the Sheet
+        var map = {};
+        for (var i = 0; i < n; i++) map[key + ':' + i] = json.substr(i * MAX_CHARS, MAX_CHARS);
+        map[key] = '#pieces:' + n + ':' + json.length;
+        cache.putAll(map, DATA_TTL);
+      } catch (e) { /* cache down or full: fine */ }
+    }
+    function getText(key) {
+      var text = null;
+      try { text = (cache.getAll([key]) || {})[key]; } catch (e) { return null; }
+      if (!text || text.indexOf('#pieces:') !== 0) return text || null;
+      var a = text.split(':'), n = +a[1], len = +a[2], keys = [], out = '';
+      for (var i = 0; i < n; i++) keys.push(key + ':' + i);
+      var got = {}; try { got = cache.getAll(keys) || {}; } catch (e) { return null; }
+      for (var j = 0; j < n; j++) { if (typeof got[keys[j]] !== 'string') return null; out += got[keys[j]]; }
+      return out.length === len ? out : null; // a missing or half-expired piece = not cached
+    }
     function read(tab) {
       var key = dkey(tab), text = null;
       readAt[tab] = loadVersions()[tab];
-      try { text = (cache.getAll([key]) || {})[key]; } catch (e) { text = null; }
+      text = getText(key);
       if (text) { try { return JSON.parse(text); } catch (e) { /* fall through to the Sheet */ } }
       var data = grid.read(tab);
-      try { var json = JSON.stringify(data); if (json.length <= MAX_CHARS) cache.put(key, json, DATA_TTL); } catch (e) { /* too big or cache down: fine */ }
+      try { putText(key, JSON.stringify(data)); } catch (e) { /* fine */ }
       return data;
     }
     return {
@@ -61,6 +84,28 @@
         try { if (h.length) cache.put(key, JSON.stringify(h), VERSION_TTL); } catch (e) { /* optional */ }
         return h;
       },
+      /** The header row straight from the Sheet; the remembered copy is refreshed with it. */
+      liveHeaders: function (tab) {
+        var h = grid.headers ? grid.headers(tab) : (grid.read(tab)[0] || []);
+        try { if (h.length) cache.put('h:' + tab, JSON.stringify(h), VERSION_TTL); } catch (e) { /* optional */ }
+        return h;
+      },
+      /** Header rows of many tabs with one cache call (used by the "is the Sheet upgraded?" check). */
+      allHeaders: function (tabs) {
+        var got = {}, out = {};
+        try { got = cache.getAll(tabs.map(function (t) { return 'h:' + t; })) || {}; } catch (e) { got = {}; }
+        tabs.forEach(function (t) {
+          var text = got['h:' + t];
+          if (text) { try { out[t] = JSON.parse(text); return; } catch (e) { /* read it */ } }
+          var h = grid.headers ? grid.headers(t) : (grid.read(t)[0] || []);
+          try { if (h.length) cache.put('h:' + t, JSON.stringify(h), VERSION_TTL); } catch (e) { /* optional */ }
+          out[t] = h;
+        });
+        return out;
+      },
+      /** One row and the whole tab, straight from the Sheet (to check where a row stands before it is written). */
+      readRow: function (tab, i) { return grid.readRow ? grid.readRow(tab, i) : (grid.read(tab)[i] || null); },
+      readLive: function (tab) { return grid.read(tab); },
       tail: function (tab, n) { return grid.tail ? grid.tail(tab, n) : grid.read(tab).slice(1).slice(-n); },
       appendMany: function (batch) {
         batch.forEach(function (b) { dirty[b.tab] = true; });
@@ -83,12 +128,19 @@
           var untouched = readAt[t] && current[vkey(t)] === readAt[t];
           versions[t] = newVersion(); map[vkey(t)] = versions[t];
           if (full && full[t] && untouched) {
-            try { var json = JSON.stringify(full[t]); if (json.length <= MAX_CHARS) cache.put('d:' + t + ':' + versions[t], json, DATA_TTL); } catch (e) { /* optional */ }
+            try { putText('d:' + t + ':' + versions[t], JSON.stringify(full[t])); } catch (e) { /* optional */ }
           }
           readAt[t] = versions[t];
         });
         dirty = {};
-        try { cache.putAll(map, VERSION_TTL); } catch (e) { /* if this fails the data TTL still bounds staleness */ }
+        // The new versions MUST reach the cache: otherwise other requests keep reading the copy from before this write.
+        try { cache.putAll(map, VERSION_TTL); }
+        catch (e) {
+          Object.keys(map).forEach(function (k) {
+            try { cache.put(k, map[k], VERSION_TTL); }
+            catch (e2) { try { if (cache.remove) cache.remove(k); } catch (e3) { /* the data TTL (10 min) is the last bound */ } }
+          });
+        }
       }
     };
   }

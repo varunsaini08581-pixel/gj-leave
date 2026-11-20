@@ -219,7 +219,8 @@ def build(out):
     ]))
     s.append(gap(6))
     s.append(Paragraph('Tareekh badalni ya cancel karni ho to "My requests" mein jao. Naya message mat bhejo; '
-                       'badlav par saari jaanch dobara hoti hai.', S))
+                       'badlav par saari jaanch dobara hoti hai. Approve ho chuki chhutti badli to wo dobara Aakash sir ke paas jayegi. '
+                       'Half day ke liye bhi notice aapki duty shuru hone ke samay tak gina jata hai.', S))
     s.append(PageBreak())
 
     # 4 ------------------------------------------------------------------

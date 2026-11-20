@@ -23,7 +23,7 @@
     { item: 'Grouping (idle together)', key: 'grouping', grace: 0, per: 'month' }
   ];
   var DISPUTE_WINDOW_MS = 24 * 3600000;
-  var SETTING_KEYS = { graceTable: 1, closedDays: 1, reminderHours: 1, ownerEmail: 1, managerEmail: 1 };
+  var SETTING_KEYS = { graceTable: 1, closedDays: 1, reminderHours: 1, ownerEmail: 1, managerEmail: 1, startDate: 1 };
 
   function owner(actor) { if (actor.role !== 'owner') H.fail('FORBIDDEN', 'Only the owner can do this.'); }
   function boss(actor) { if (actor.role === 'staff') H.fail('FORBIDDEN', 'Only Aakash or Varun.'); }
@@ -57,11 +57,12 @@
       var date = a.date || H.today(ctx);
       if (!Cal.isDate(date)) H.fail('BLOCKED', 'Pick the date.');
       if (date > H.today(ctx)) H.fail('BLOCKED', 'The date cannot be in the future.');
+      H.assertOpen(ctx, date);
       if (a.item === 'dress' && Cal.weekday(date) === 0) H.fail('BLOCKED', 'The dress code is Monday to Saturday. Sunday is casual.');
       // The same entry sent twice (a retry after a slow reply) is one incident, not two.
       var twin = ctx.db.rows('Incidents').filter(function (i) {
         return i.personId === a.personId && i.item === a.item && i.date === date && i.createdBy === actor.id && i.note === String(a.note || '').trim() &&
-          (i.photoId || '') === (a.photoId || '') && Math.abs(ctx.now - i.createdAt) < 30000;
+          (i.photoId || '') === (a.photoId || '') && Math.abs(ctx.now - i.createdAt) < 5 * 60000;
       })[0];
       if (twin) return { id: twin.id, result: twin.result, count: twin.countInPeriod, grace: twin.grace, repeated: true };
       var pk = periodKey(date, row.per);
@@ -89,6 +90,7 @@
     return ctx.env.withLock(function () {
       var v = H.find(ctx, 'Violations', id);
       if (!v || v.personId !== actor.id) H.fail('NOT_FOUND', 'No such violation.');
+      H.assertOpen(ctx, v.date);
       if (v.disputeState) H.fail('BLOCKED', 'This violation has already been disputed.');
       if (ctx.now - v.createdAt > DISPUTE_WINDOW_MS) H.fail('BLOCKED', 'The 24-hour dispute window has passed.');
       need(text, 'Write why you dispute it.');
@@ -105,6 +107,7 @@
       owner(actor);
       var v = H.find(ctx, 'Violations', id);
       if (!v || v.disputeState !== 'open') H.fail('NOT_FOUND', 'No open dispute.');
+      H.assertOpen(ctx, v.date);
       need(note, 'Write your decision note.');
       var state = uphold ? 'upheld' : 'removed';
       ctx.db.update('Violations', id, { disputeState: state, disputeDecidedBy: actor.id, disputeDecidedAt: ctx.now, note: (v.note ? v.note + ' | ' : '') + 'Dispute ' + state + ': ' + String(note).trim() });
@@ -120,24 +123,27 @@
   function editLeave(ctx, actor, id, input) {
     return ctx.env.withLock(function () {
       var r = H.find(ctx, 'LeaveRequests', id);
-      if (!r || !(r.status === 'Approved' || H.OPEN[r.status])) H.fail('NOT_FOUND', 'This request cannot be edited.');
+      if (!r || !(r.status === 'Approved' || H.OPEN[r.status]) || r.route === 'system' || r.route === 'override') H.fail('NOT_FOUND', 'This request cannot be edited.');
       if (r.personId !== actor.id && actor.role === 'staff') H.fail('FORBIDDEN', 'You can edit only your own request.');
+      H.assertOpen(ctx, r.dates);
       var person = H.find(ctx, 'People', r.personId);
       if (ctx.now >= Core.toMs(r.dates[0], r.kind === 'half' ? r.halfStart : person.dutyStart) && actor.role === 'staff') H.fail('FORBIDDEN', 'This leave has started. Ask Aakash or Varun.');
-      var ev = H.evaluate(ctx, person, input, id);
+      // A recorded phone call keeps its time when Aakash or Varun corrects the entry for the same first day.
+      var keep = r.noticeAt && actor.role !== 'staff' && (input.dates || []).slice().sort()[0] === r.dates[0] ? { at: r.noticeAt } : null;
+      var ev = H.evaluate(ctx, person, input, id, keep);
       if (ev.decision === 'blocked') H.fail('BLOCKED', ev.reasons.join(' '));
       // Handoff Part 6: an edit after approval goes back to pending. It is never approved again by the system.
       if (r.status === 'Approved' && ev.decision === 'auto') { ev.decision = 'aakash'; ev.reasons = ['Edited after approval.']; }
       // Violations that came from the old version are withdrawn; the new version earns its own.
-      H.withdrawViolations(ctx, id, 'Request edited');
       var patch = { kind: input.kind, dates: ev.dates, halfStart: input.halfStart || '', reasonCode: input.reasonCode, reasonText: String(input.reasonText).trim(),
-        submittedAt: ctx.now, type: ev.type, noticeHours: ev.noticeHours, run: ev.run, route: ev.decision, status: H.STATUS_FOR[ev.decision],
+        submittedAt: ctx.now, noticeAt: keep ? keep.at : '', type: ev.type, noticeHours: ev.noticeHours, run: ev.run, route: ev.decision, status: H.STATUS_FOR[ev.decision],
         approvals: ev.decision === 'special' ? { aakash: '', varun: '' } : {}, extremeEmergency: !!input.extremeEmergency, emergencyNo: ev.emergencyNo,
         penaltyEmergency: ev.penaltyEmergency, restrictionViolation: ev.restrictionViolation, decidedAt: '', decidedBy: '', decisionReason: '',
         history: r.history.concat([{ at: ctx.now, by: actor.id, action: 'edited', from: { dates: r.dates, kind: r.kind, status: r.status } }]) };
       if (ev.decision === 'auto' || ev.decision === 'recorded') { patch.decidedAt = ctx.now; patch.decidedBy = 'system'; }
       ctx.db.update('LeaveRequests', id, patch);
-      if (patch.status === 'Approved' || patch.status === 'Recorded') H.onGranted(ctx, Object.assign({}, r, patch));
+      // The violations of the old version stand until the new version is decided (granted now, or by Aakash later).
+      if (patch.status === 'Approved' || patch.status === 'Recorded') { H.withdrawViolations(ctx, id, 'Request edited'); H.onGranted(ctx, Object.assign({}, r, patch)); }
       if (ev.decision === 'aakash' || ev.decision === 'special') H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'approval', 'Leave request edited', person.name + ': ' + ev.dates.join(', '), id); });
       if (ev.decision === 'varun' || ev.decision === 'special') H.byRole(ctx, 'owner').forEach(function (o) { H.notify(ctx, o.id, 'approval', 'Leave request edited', person.name + ': ' + ev.dates.join(', '), id); });
       H.audit(ctx, actor.id, 'leave.edit', id, { status: patch.status });
@@ -158,6 +164,8 @@
       var dates = (input.dates || []).slice().sort();
       if (!dates.length || !/^(full|half)$/.test(input.kind) || !dates.every(Cal.isDate)) H.fail('BLOCKED', 'Pick exact dates.');
       if (input.kind === 'half' && (dates.length !== 1 || !Cal.isTime(input.halfStart))) H.fail('BLOCKED', 'A half day is one date with a start time.');
+      H.assertOpen(ctx, dates);
+      H.assertOpen(ctx, dates);
       var clashOverlap = H.liveLeaves(ctx, person.id).some(function (r) { return r.dates.some(function (d) { return dates.indexOf(d) !== -1; }); });
       if (clashOverlap) H.fail('BLOCKED', 'This person already has a request on one of these dates.');
       var row = { id: ctx.env.randomId(), personId: person.id, kind: input.kind, dates: dates, halfStart: input.halfStart || '', reasonCode: input.reasonCode || 'Other',
@@ -178,7 +186,7 @@
   var PERSON_FIELDS = ['name', 'group', 'role', 'dutyStart', 'dutyEnd', 'sundayOff', 'noApproval', 'noClash', 'noQuota', 'dressExempt', 'active', 'email', 'phone'];
   function validPerson(p) {
     if (!String(p.name || '').trim()) H.fail('BLOCKED', 'Name is required.');
-    if (!/^\d{2}:\d{2}$/.test(p.dutyStart || '') || !/^\d{2}:\d{2}$/.test(p.dutyEnd || '') || p.dutyEnd <= p.dutyStart) H.fail('BLOCKED', 'Duty times must be HH:MM and the end after the start.');
+    if (!Cal.isTime(p.dutyStart) || !Cal.isTime(p.dutyEnd) || p.dutyEnd <= p.dutyStart) H.fail('BLOCKED', 'Duty times must be HH:MM and the end after the start.');
     if (['staff', 'manager', 'owner'].indexOf(p.role) === -1) H.fail('BLOCKED', 'Role must be staff, manager or owner.');
     var s = p.sundayOff;
     if (!(s === 'every' || (Array.isArray(s) && s.every(function (n) { return n >= 1 && n <= 5; })))) H.fail('BLOCKED', 'Sunday roster is not valid.');
@@ -214,7 +222,8 @@
       }
       var id = clean.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + ctx.env.randomId().slice(0, 4);
       if (clean.active === '') clean.active = true;
-      ctx.db.insert('People', Object.assign({ id: id, pinSalt: '', pinHash: '', pinTries: 0, pinLockedUntil: 0 }, clean));
+      clean.joinedOn = H.today(ctx); // nobody is marked absent for days before they were added
+      ctx.db.insert('People', Object.assign({ id: id, pinSalt: '', pinHash: '', pinTries: 0, pinLockedUntil: 0, pinLockLevel: 0 }, clean));
       H.audit(ctx, actor.id, 'people.create', id, clean);
       return { id: id };
     });
@@ -278,8 +287,24 @@
       owner(actor);
       if (!Object.prototype.hasOwnProperty.call(SETTING_KEYS, key)) H.fail('BLOCKED', 'Unknown setting.');
       if (key === 'closedDays' && !(Array.isArray(value) && value.length <= 400 && value.every(Cal.isDate))) H.fail('BLOCKED', 'Closed days must be a list of dates.');
+      if (key === 'closedDays') {
+        // Adding or removing a closed day re-counts that month: not possible once the month is locked.
+        var before = []; try { before = JSON.parse(setting(ctx, 'closedDays') || '[]') || []; } catch (e) { before = []; }
+        H.assertOpen(ctx, value.filter(function (d) { return before.indexOf(d) === -1; }).concat(before.filter(function (d) { return value.indexOf(d) === -1; })));
+      }
       if (key === 'reminderHours' && !(Number(value) >= 1 && Number(value) <= 48)) H.fail('BLOCKED', 'Reminder hours must be between 1 and 48.');
+      if (key === 'startDate' && !Cal.isDate(value)) H.fail('BLOCKED', 'Pick the start date.');
+      var added = [];
+      if (key === 'closedDays') { var was = H.closedSet(ctx); added = value.filter(function (d) { return !was[d]; }); }
       putSetting(ctx, actor, key, value);
+      // The shop was closed on a day that the evening job had already marked: those absences are withdrawn.
+      added.forEach(function (d) {
+        ctx.db.rows('LeaveRequests').forEach(function (r) {
+          if (r.route !== 'system' || r.dates.indexOf(d) === -1 || r.status === 'Cancelled') return;
+          ctx.db.update('LeaveRequests', r.id, { status: 'Cancelled', decisionReason: 'Shop closed that day', history: r.history.concat([{ at: ctx.now, by: actor.id, action: 'shop closed' }]) });
+          H.withdrawViolations(ctx, r.id, 'Shop closed that day');
+        });
+      });
       return { ok: true };
     });
   }

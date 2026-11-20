@@ -8,14 +8,14 @@
 
   var TABS = {
     People: ['id', 'name', 'group', 'role', 'dutyStart', 'dutyEnd', 'sundayOff', 'noApproval', 'noClash', 'noQuota',
-      'dressExempt', 'active', 'email', 'phone', 'pinSalt', 'pinHash', 'pinTries', 'pinLockedUntil', 'pinLockLevel'],
-    Devices: ['id', 'personId', 'tokenHash', 'label', 'status', 'requestedAt', 'decidedAt', 'decidedBy', 'pinTries', 'pinLockedUntil'],
+      'dressExempt', 'active', 'email', 'phone', 'pinSalt', 'pinHash', 'pinTries', 'pinLockedUntil', 'pinLockLevel', 'joinedOn'],
+    Devices: ['id', 'personId', 'tokenHash', 'label', 'status', 'requestedAt', 'decidedAt', 'decidedBy', 'pinTries', 'pinLockedUntil', 'pinLockLevel', 'signedOut'],
     PayInfo: ['personId', 'fixedSalary', 'targetAllowance', 'disciplineBonus', 'dutyHours', 'updatedAt', 'updatedBy'],
     Rules: ['id', 'on', 'label', 'members', 'minPresent', 'rosterSundayException', 'emergencyIfAllPresent'],
     Restrictions: ['id', 'from', 'to', 'note', 'rule', 'appliesTo', 'on', 'createdBy', 'createdAt'],
     LeaveRequests: ['id', 'personId', 'kind', 'dates', 'halfStart', 'reasonCode', 'reasonText', 'submittedAt', 'type',
       'noticeHours', 'run', 'route', 'status', 'approvals', 'extremeEmergency', 'emergencyNo', 'penaltyEmergency',
-      'restrictionViolation', 'enteredBy', 'decidedAt', 'decidedBy', 'decisionReason', 'history', 'override', 'remindedAt'],
+      'restrictionViolation', 'enteredBy', 'decidedAt', 'decidedBy', 'decisionReason', 'history', 'override', 'remindedAt', 'noticeAt'],
     ShortRequests: ['id', 'personId', 'date', 'kind', 'time', 'submittedAt', 'status', 'note', 'decidedAt', 'decidedBy', 'decisionReason', 'remindedAt'],
     Outings: ['id', 'personId', 'date', 'reason', 'expectedMinutes', 'requestedAt', 'status', 'approvedAt', 'approvedBy',
       'decisionReason', 'backAt', 'confirmedAt', 'confirmedBy', 'correctedBackAt', 'minutes', 'remindedAt'],
@@ -41,13 +41,18 @@
   var NUM_COLS = ['pinTries', 'pinLockedUntil', 'pinLockLevel', 'requestedAt', 'decidedAt', 'submittedAt', 'noticeHours', 'run', 'emergencyNo',
     'at', 'lat', 'lng', 'accuracy', 'distance', 'minutes', 'statedMinutes', 'createdAt', 'disputeAt', 'disputeDecidedAt',
     'lockedAt', 'readAt', 'emailedAt', 'updatedAt', 'minPresent', 'fixedSalary', 'targetAllowance', 'disciplineBonus', 'dutyHours',
-    'expectedMinutes', 'countInPeriod', 'grace', 'approvedAt', 'backAt', 'confirmedAt', 'correctedBackAt', 'remindedAt'];
+    'noticeAt', 'expectedMinutes', 'countInPeriod', 'grace', 'approvedAt', 'backAt', 'confirmedAt', 'correctedBackAt', 'remindedAt'];
   var BOOL_COLS = ['noApproval', 'noClash', 'noQuota', 'dressExempt', 'active', 'on', 'extremeEmergency', 'penaltyEmergency',
-    'restrictionViolation', 'informed'];
+    'restrictionViolation', 'informed', 'signedOut'];
 
-  var SCHEMA_VERSION = 2;
+  var SCHEMA_VERSION = 3;
+  // Tabs added after the first version: an older Sheet may rightly not have them yet. Every other
+  // missing tab on a Sheet that is in use means a tab was renamed or deleted by hand.
+  var TAB_SINCE = { Thumbs: 2 };
+  // What an empty or unreadable JSON cell is read as (everything else: null).
+  var JSON_DEFAULT = { dates: [], approvals: {}, history: [], members: [] };
 
-  var api = { TABS: TABS, JSON_COLS: JSON_COLS, NUM_COLS: NUM_COLS, BOOL_COLS: BOOL_COLS, SCHEMA_VERSION: SCHEMA_VERSION };
+  var api = { TABS: TABS, JSON_COLS: JSON_COLS, NUM_COLS: NUM_COLS, BOOL_COLS: BOOL_COLS, SCHEMA_VERSION: SCHEMA_VERSION, TAB_SINCE: TAB_SINCE, JSON_DEFAULT: JSON_DEFAULT };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJSchema = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

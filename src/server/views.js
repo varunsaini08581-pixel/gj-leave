@@ -45,6 +45,7 @@
   /** Month grid by group, with roster Sundays, restrictions and clash-risk days. */
   function calendar(ctx, actor, monthKey) {
     boss(actor);
+    validMonth(monthKey);
     var people = staff(ctx), names = {}, map = H.peopleMap(ctx), rules = H.rules(ctx);
     ctx.db.rows('People').forEach(function (p) { names[p.id] = p.name; });
     var leaves = ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Approved' || r.status === 'Recorded' || H.OPEN[r.status] || r.status === 'Absent – unannounced'; });
@@ -94,6 +95,18 @@
     return out;
   }
 
+  function validMonth(monthKey) { if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(monthKey))) H.fail('BLOCKED', 'Pick a month.'); }
+  /** Everyone who belongs in a month's report: today's staff, and anyone who has left but has entries in that month. */
+  function staffForMonth(ctx, monthKey) {
+    var seen = {};
+    ['LeaveRequests', 'Punches', 'DayMinutes', 'Violations'].forEach(function (tab) {
+      ctx.db.rows(tab).forEach(function (r) {
+        var dates = tab === 'LeaveRequests' ? r.dates : [r.date];
+        if (dates.some(function (d) { return Cal.monthKey(String(d)) === monthKey; })) seen[r.personId] = true;
+      });
+    });
+    return ctx.db.rows('People').filter(function (p) { return p.role === 'staff' && (p.active !== false || seen[p.id]); });
+  }
   function lockedMonths(ctx) {
     var m = {}; ctx.db.rows('MonthSheet').forEach(function (r) { if (r.personId !== 'correction' && r.personId !== 'lock-ack') m[r.month] = true; });
     return m;
@@ -102,6 +115,7 @@
   /** All staff for one month. If the month is locked, the locked result is returned, plus later corrections. */
   function monthReport(ctx, actor, monthKey) {
     boss(actor);
+    validMonth(monthKey);
     var locked = ctx.db.rows('MonthSheet').filter(function (r) { return r.month === monthKey; });
     var acks = locked.filter(function (r) { return r.personId === 'lock-ack'; }).map(function (r) { return r.result.by; });
     var rows = locked.filter(function (r) { return r.personId !== 'correction' && r.personId !== 'lock-ack'; });
@@ -109,13 +123,14 @@
       .map(function (r) { return { personId: r.personId, dates: r.dates, reason: r.override }; });
     if (rows.length) return { month: monthKey, locked: true, lockedBy: rows[0].lockedBy, lockedAt: rows[0].lockedAt, people: rows.map(function (r) { return r.result; }),
       corrections: locked.filter(function (r) { return r.personId === 'correction'; }).map(function (r) { return r.result; }), overrides: overrides };
-    return { month: monthKey, locked: false, lockConfirmedBy: acks, people: staff(ctx).map(function (p) { return Att.myMonth(ctx, p.id, monthKey); }), corrections: [], overrides: overrides };
+    return { month: monthKey, locked: false, lockConfirmedBy: acks, people: staffForMonth(ctx, monthKey).map(function (p) { return Att.myMonth(ctx, p.id, monthKey); }), corrections: [], overrides: overrides };
   }
 
   /** Lock a finished month. After the lock nothing in it is recalculated; corrections are new logged entries. */
   function lockMonth(ctx, actor, monthKey) {
     return ctx.env.withLock(function () {
       boss(actor);
+      validMonth(monthKey);
       if (monthKey >= Cal.monthKey(H.today(ctx))) H.fail('BLOCKED', 'A month can be locked only after it has ended.');
       if (lockedMonths(ctx)[monthKey]) H.fail('BLOCKED', 'This month is already locked.');
       // Handoff 3.11: Aakash AND Varun lock the month. The first one confirms; the lock happens when the other one confirms too.
@@ -128,7 +143,7 @@
         others.forEach(function (o) { H.notify(ctx, o.id, 'month', 'Month report ready to lock: ' + monthKey, actor.name + ' has confirmed it. Check the report and lock it.', monthKey); });
         return { month: monthKey, locked: false, waitingFor: others.map(function (o) { return o.name; }) };
       }
-      staff(ctx).forEach(function (p) {
+      staffForMonth(ctx, monthKey).forEach(function (p) {
         ctx.db.insert('MonthSheet', { id: ctx.env.randomId(), month: monthKey, personId: p.id, result: Att.myMonth(ctx, p.id, monthKey), lockedBy: actor.id, lockedAt: ctx.now });
       });
       H.audit(ctx, actor.id, 'month.lock', monthKey);
@@ -140,6 +155,7 @@
   function addCorrection(ctx, actor, monthKey, personId, note) {
     return ctx.env.withLock(function () {
       boss(actor);
+      validMonth(monthKey);
       if (!lockedMonths(ctx)[monthKey]) H.fail('BLOCKED', 'This month is not locked. Change the entry itself.');
       if (!String(note || '').trim()) H.fail('REASON', 'Write the correction.');
       var names = {}; ctx.db.rows('People').forEach(function (p) { names[p.id] = p.name; });

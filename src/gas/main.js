@@ -55,9 +55,22 @@ function gjGrid_() {
       });
       return first;
     },
-    writeRow: function (name, index, row) {
+    /** One row as the Sheet shows it now (0-based index, 0 = headers); null when there is no such row. */
+    readRow: function (name, index) {
       var sh = ss.getSheetByName(name);
-      sh.getRange(index + 1, 1, 1, row.length).setValues([row]); // the whole tab is already plain text
+      if (!sh || index + 1 > sh.getLastRow()) return null;
+      return sh.getRange(index + 1, 1, 1, sh.getLastColumn()).getDisplayValues()[0];
+    },
+    /**
+     * Writes the given cells of one row. The row array may have gaps: a gap is a column that is not
+     * the app's own (something the owner added), and it is not touched.
+     */
+    writeRow: function (name, index, row) {
+      var sh = ss.getSheetByName(name), start = -1, run = [];
+      for (var c = 0; c <= row.length; c++) {
+        if (c < row.length && row[c] !== undefined) { if (start === -1) start = c; run.push(row[c]); continue; }
+        if (start !== -1) { sh.getRange(index + 1, start + 1, 1, run.length).setNumberFormat('@').setValues([run]); start = -1; run = []; }
+      }
     }
   };
 }
@@ -94,7 +107,8 @@ function gjCache_() {
   return {
     getAll: function (keys) { return c.getAll(keys); },
     put: function (k, v, ttl) { c.put(k, v, ttl); },
-    putAll: function (map, ttl) { c.putAll(map, ttl); }
+    putAll: function (map, ttl) { c.putAll(map, ttl); },
+    remove: function (k) { c.remove(k); }
   };
 }
 function gjCachedGrid_() {
@@ -111,7 +125,7 @@ function setupOrUpgrade() {
   var lock = LockService.getScriptLock();
   lock.waitLock(25000);
   try {
-    var done = GJStore.setup(gjGrid_());
+    var done = GJStore.setup(gjGrid_(), { today: Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyy-MM-dd') });
     // Setup may have changed columns: retire every cached copy.
     var all = {}; Object.keys(GJSchema.TABS).forEach(function (t) { all['v:' + t] = Utilities.getUuid().slice(0, 8); });
     CacheService.getScriptCache().putAll(all, 21600);

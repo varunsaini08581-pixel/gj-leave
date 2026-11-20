@@ -30,3 +30,15 @@ for (const file of ORDER.filter(f => !f.startsWith('src/gas/'))) mock += `\n// =
 mock += '\n' + fs.readFileSync(path.join(root, 'tools', 'mock-boot.js'), 'utf8');
 fs.writeFileSync(path.join(root, 'docs', 'mock-server.js'), mock);
 console.log('Built docs/mock-server.js (' + mock.length + ' bytes)');
+
+// Fresh files after every release: each script and style address in index.html carries the hash of its content.
+(function stampIndex() {
+  const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+  const docs = path.join(__dirname, '..', 'docs'), file = path.join(docs, 'index.html');
+  let html = fs.readFileSync(file, 'utf8');
+  const out = html.replace(/(src|href)="([a-z-]+\.(?:js|css))(?:\?v=[0-9a-f]+)?"/g, (m, attr, name) => {
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(path.join(docs, name))).digest('hex').slice(0, 10);
+    return attr + '="' + name + '?v=' + hash + '"';
+  });
+  if (out !== html) fs.writeFileSync(file, out);
+})();

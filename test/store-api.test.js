@@ -136,7 +136,7 @@ test('API privacy: a staff member cannot open another person\u2019s month page',
   assert.equal(a.call(a.t, 'myMonth', a.neha, { personId: 'vikas', month: '2026-11' }).code, 'FORBIDDEN');
   assert.equal(a.call(a.t, 'myMonth', a.neha, { month: '2026-11' }).data.name, 'Neha');
   assert.equal(a.call(a.t, 'myMonth', a.aakash, { personId: 'vikas', month: '2026-11' }).data.name, 'Vikas');
-  assert.equal(a.call(a.t, 'checkIn', a.neha, {}).code, 'BLOCKED'); // a photo is required
+  assert.equal(a.call(a.t, 'checkIn', a.neha, {}).code, 'UPDATE'); // a photo is required; only an app from before the photo check-in sends none
   assert.equal(a.call(a.t, 'checkIn', a.neha, { photo: 'data:image/jpeg;base64,AAAA', thumb: 'data:image/jpeg;base64,BB' }).ok, true);
 });
 

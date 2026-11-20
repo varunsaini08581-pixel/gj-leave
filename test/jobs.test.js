@@ -87,6 +87,7 @@ test('evening before: leave starting tomorrow gets one reminder', () => {
 
 test('end of day: absent check + daily summary to Varun + missing check-out to Aakash', () => {
   const s = seed();
+  s.db.insert('Settings', { key: 'startDate', value: D }); // the Sheet was started today: earlier days are not looked at
   Core.submitLeave(s.ctx('2026-11-20', '10:00'), s.actor('Vikas'), leave([D]));
   ['Neha', 'Raunak', 'Manish', 'Bhawna', 'Pooja', 'Anita', 'Muskan'].forEach(n => Att.checkIn(s.ctx(D, '09:30'), s.actor(n)));
   Att.checkOut(s.ctx(D, '18:30'), s.actor('Neha'));

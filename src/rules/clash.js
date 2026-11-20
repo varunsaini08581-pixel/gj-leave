@@ -78,6 +78,8 @@
         if (!rule.on || !rule.emergencyIfAllPresent || rule.emergencyIfAllPresent.indexOf(request.person) === -1) return;
         var m0 = withGone(rule, map, people);
         if (!ruleBroken(rule, date, m0)) return;
+        // Only when an extreme emergency was really granted for that day (never because someone was a little late).
+        if (!others.some(function (a) { return a.date === date && a.extreme && rule.members.indexOf(a.person) !== -1; })) return;
         result.blocks.push({ rule: rule.id + '-E', date: date, who: rule.members.filter(function (m) { return m0[m] === 'request'; }),
           message: 'Not allowed: ' + rule.label + ' is running on an extreme emergency on ' + niceDate(date) + ' — ' + rule.emergencyIfAllPresent.join(' and ') + ' must both be present.' });
         result.ok = false;

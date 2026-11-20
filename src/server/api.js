@@ -14,6 +14,8 @@
   var Views = (typeof require !== 'undefined') ? require('./views.js') : root.GJViews;
 
   var MIN_CLIENT_VERSION = 1; // version gate: an old cached app must update before it can do anything
+  var SERVER_VERSION = 9;     // goes up with every server release; the phone shows it under More
+  var Schema = (typeof require !== 'undefined') ? require('./schema.js') : root.GJSchema;
 
   function leaveView(r, names, viewer) {
     var own = r.personId === viewer.id, boss = viewer.role !== 'staff';
@@ -42,7 +44,7 @@
       var shop = ctx.db.rows('Settings').filter(function (x) { return x.key === 'shopPoint'; })[0], point = null;
       try { if (shop) { var sp = JSON.parse(shop.value); point = { lat: sp.lat, lng: sp.lng }; } } catch (e) { point = null; }
       return { id: p.id, name: p.name, role: p.role, group: p.group, dutyStart: p.dutyStart, dutyEnd: p.dutyEnd, reasons: Core.REASONS,
-        dressExempt: !!p.dressExempt, deviceShort: String(actor.deviceId || '').slice(-4), shopPoint: point, serverTime: ctx.now };
+        serverVersion: SERVER_VERSION, schemaVersion: Schema.SCHEMA_VERSION, dressExempt: !!p.dressExempt, deviceShort: String(actor.deviceId || '').slice(-4), shopPoint: point, serverTime: ctx.now };
     },
     previewLeave: function (ctx, actor, a) { return Core.previewLeave(ctx, actor, a); },
     submitLeave: function (ctx, actor, a) { return Core.submitLeave(ctx, actor, a); },
@@ -77,6 +79,7 @@
       return result;
     },
     photo: function (ctx, actor, a) {
+      if (typeof a.id !== 'string' || !a.id) throw err('NOT_FOUND', 'No such photo.');
       var p = ctx.db.rows('Punches').filter(function (x) { return x.photoId === a.id || x.thumbId === a.id; })[0];
       if (!p) throw err('NOT_FOUND', 'No such photo.');
       var isThumbToday = p.thumbId === a.id && p.date === Core._.today(ctx);   // "Today at GJ": everyone
@@ -172,6 +175,7 @@
     monthReport: function (ctx, actor, a) { return Views.monthReport(ctx, actor, a.month); },
     lockMonth: function (ctx, actor, a) { return Views.lockMonth(ctx, actor, a.month); },
     addCorrection: function (ctx, actor, a) { return Views.addCorrection(ctx, actor, a.month, a.personId, a.note); },
+    signOut: function (ctx, actor) { return Core.signOut(ctx, actor); },
     setPin: function (ctx, actor, a) { return Core.setPin(ctx, actor, a.personId, a.pin); },
     devices: function (ctx, actor) {
       if (actor.role !== 'owner') throw err('FORBIDDEN', 'Only the owner.');
@@ -198,7 +202,8 @@
   var PREPARE = {
     checkIn: function (ctx, actor, a) {
       // The check-in photo is taken inside the app (back camera, landscape) and is required.
-      if (!a.photo || !a.thumb) throw err('BLOCKED', 'Take the check-in photo first.');
+      // An app from before the photo check-in sends no photo at all: it must update, it can never check in.
+      if (!a.photo || !a.thumb) throw err('UPDATE', 'Please update the app: close it and open it again.');
       if (typeof a.photo !== 'string' || typeof a.thumb !== 'string' || a.photo.length > 900000 || a.thumb.length > 45000) throw err('BLOCKED', 'The photo is too large. Please try again.');
       // Only a picture made by the app is stored: never a link that other phones would then load.
       if (!JPEG.test(a.thumb) || !JPEG.test(a.photo)) throw err('BLOCKED', 'The photo could not be read. Please take it again.');
@@ -247,6 +252,9 @@
       checkSizes(args, '', 0);
       if (action === 'names') return { ok: true, data: PUBLIC.names(ctx, args) };
       if (own(PUBLIC, action)) return { ok: true, data: locked(ctx, function () { return PUBLIC[action](ctx, args); }) };
+      // New code on a Sheet that has not been upgraded yet (setupOrUpgrade not run): nothing is
+      // attempted, nothing is half-saved, and the phone gets a clear answer.
+      if (ctx.db.schemaProblems && ctx.db.schemaProblems().length) return { ok: false, code: 'UPGRADE', message: 'The app is being updated. Please try again in a few minutes.' };
       var actor = Core.authenticate(ctx, request.personId, request.deviceToken);
       if (own(READ_ONLY, action)) return { ok: true, data: PRIVATE[action](ctx, actor, args) };
       if (own(PREPARE, action)) args = PREPARE[action](ctx, actor, args);
@@ -256,11 +264,14 @@
       }) };
     } catch (e) {
       if (e && e.code) return { ok: false, code: e.code, message: e.message };
-      return { ok: false, code: 'ERROR', message: 'Something went wrong. Please try again.' };
+      // Unexpected: leave a trace the owner or a developer can find (Apps Script: Executions log).
+      var ref = 'E' + String(ctx && ctx.now || 0).slice(-7);
+      try { if (typeof console !== 'undefined' && console.error) console.error('GJ Leave error ' + ref + ' in "' + (request && request.action) + '": ' + (e && (e.stack || e.message || e))); } catch (e2) { /* no log available */ }
+      return { ref: ref, ok: false, code: 'ERROR', message: 'Something went wrong. Please try again.' };
     }
   }
 
-  var api = { handle: handle, MIN_CLIENT_VERSION: MIN_CLIENT_VERSION };
+  var api = { handle: handle, MIN_CLIENT_VERSION: MIN_CLIENT_VERSION, SERVER_VERSION: SERVER_VERSION };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJApi = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

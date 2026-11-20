@@ -299,6 +299,7 @@ test('F11 a date that does not exist (30 Feb) must be refused by the server', ()
 // =====================================================================================
 test('F12 endOfDay run before closing time must not record absences and violations', () => {
   const s = seed();
+  s.db.insert('Settings', { key: 'startDate', value: '2026-11-20' }); // as setupOrUpgrade writes it on a new Sheet (added with the round 6 catch-up of missed nights)
   const out = Jobs.run(s.ctx('2026-11-20', '08:00'), 'endOfDay', null);
   assert.deepEqual(out.absent, [], out.absent.length + ' people marked absent at 08:00, ' + s.db.rows('Violations').length + ' violations');
 });

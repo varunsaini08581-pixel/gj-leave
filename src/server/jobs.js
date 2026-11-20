@@ -115,13 +115,23 @@
   /** After closing: absent check, then the owner's daily summary of who was away or late. */
   function endOfDay(ctx) {
     var date = H.today(ctx);
-    var absent = Att.endOfDay(ctx, date);
+    // If the job did not run on an earlier night (a failed timer, quota), those days are checked now.
+    // Never before the day the Sheet was started, and never twice: a day already dealt with is left alone.
+    var start = setting(ctx, 'startDate'), absent = [];
+    [3, 2, 1].forEach(function (back) {
+      var d = Cal.addDays(date, -back);
+      if (start && d < start) return;
+      Att.endOfDay(ctx, d).forEach(function (name) { absent.push(name + ' (' + d.slice(8) + '-' + d.slice(5, 7) + ')'); });
+    });
+    absent = Att.endOfDay(ctx, date).concat(absent);
+    var hurt = ctx.db.damaged ? ctx.db.damaged() : [];
     var b = Views.board(ctx, { role: 'owner' });
     var late = b.people.filter(function (p) { return p.checkInAt && p.lateMinutes > 10; }).map(function (p) { return p.name + ' ' + p.lateMinutes + ' min (in ' + timeOf(p.checkInAt) + ')'; });
     var leave = b.people.filter(function (p) { return p.state === 'On leave' || p.halfDay; }).map(function (p) { return p.name + (p.halfDay ? ' (half day)' : ''); });
     var noOut = b.people.filter(function (p) { return p.checkInAt && !p.checkOutAt; }).map(function (p) { return p.name; });
     var lines = ['On leave: ' + (leave.join(', ') || 'none'), 'Late: ' + (late.join(', ') || 'none'), 'Absent with no request: ' + (absent.join(', ') || 'none'),
       'No check-out yet: ' + (noOut.join(', ') || 'none')];
+    if (hurt.length) lines.push('DAMAGED ROWS in the Sheet (edited by hand, ignored by the app until repaired): ' + hurt.join(', '));
     H.byRole(ctx, 'owner').forEach(function (o) { once(ctx, o.id, 'daily-summary', date, 'Daily summary ' + date, lines.join('\n  ')); });
     // A missing check-out is flagged for Aakash the next morning.
     if (noOut.length) H.byRole(ctx, 'manager').forEach(function (m) { once(ctx, m.id, 'missing-checkout', date, 'Missing check-out', noOut.join(', ') + ' on ' + date + '. Please fix.'); });
