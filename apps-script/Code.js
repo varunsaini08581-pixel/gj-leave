@@ -1295,6 +1295,14 @@
       var k = (perEvent[src.id + v.rule] = (perEvent[src.id + v.rule] || 0) + 1);
       wanted['dm:' + src.id + ':' + v.rule + ':' + k] = { rule: v.rule, date: src.date };
     });
+    // A day that became a half/full day is outside the bank, but "not informed and more than
+    // 30 min" is still a violation on that day.
+    var convertedDates = {}; mm.converted.forEach(function (c) { convertedDates[c.date] = true; });
+    ctx.db.rows('DayMinutes').forEach(function (m) {
+      if (m.personId === personId && convertedDates[m.date] && !m.informed && m.minutes > Minutes.DEFAULTS.notInformedMaxMinutes) {
+        wanted['dm:' + m.id + ':not-informed-over-30:1'] = { rule: 'not-informed-over-30', date: m.date };
+      }
+    });
     var existing = ctx.db.rows('Violations').filter(function (v) {
       return v.personId === personId && Cal.monthKey(v.date) === monthKey && String(v.proof).indexOf('dm:') === 0;
     });
@@ -1475,6 +1483,31 @@
       if (personId !== actor.id && actor.role === 'staff') throw err('FORBIDDEN', 'You can see only your own page.');
       return Att.myMonth(ctx, personId, a.month);
     },
+    today: function (ctx, actor) {
+      var date = Core._.today(ctx);
+      var mine = function (tab) { return ctx.db.rows(tab).filter(function (r) { return r.personId === actor.id && r.date === date; }); };
+      var punches = mine('Punches');
+      var pick = function (kind) { var p = punches.filter(function (x) { return x.kind === kind; })[0]; return p ? { at: p.at, flag: p.flag } : null; };
+      var outing = mine('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Approved' || o.status === 'Back'; })[0];
+      return { date: date, serverTime: ctx.now, checkIn: pick('in'), checkOut: pick('out'),
+        outing: outing ? { id: outing.id, status: outing.status, reason: outing.reason, approvedAt: outing.approvedAt, backAt: outing.backAt, minutes: outing.minutes } : null,
+        shorts: mine('ShortRequests').filter(function (q) { return q.status === 'Active'; }).map(function (q) { return { id: q.id, kind: q.kind, time: q.time }; }) };
+    },
+    approvals: function (ctx, actor) {
+      if (actor.role === 'staff') throw err('FORBIDDEN', 'Only Aakash or Varun.');
+      var names = nameMap(ctx);
+      var out = {
+        leaves: ctx.db.rows('LeaveRequests').filter(function (r) { return /^(Pending|Special)/.test(r.status); }).map(function (r) { return leaveView(r, names, actor); }),
+        absences: ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Absent \u2013 unannounced'; }).map(function (r) { return { id: r.id, name: names[r.personId], dates: r.dates }; }),
+        outings: ctx.db.rows('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Back'; }).map(function (o) {
+          return { id: o.id, name: names[o.personId], status: o.status, reason: o.reason, expectedMinutes: o.expectedMinutes, requestedAt: o.requestedAt, approvedAt: o.approvedAt, backAt: o.backAt, minutes: o.minutes };
+        }),
+        devices: []
+      };
+      if (actor.role === 'owner') out.devices = ctx.db.rows('Devices').filter(function (d) { return d.status === 'pending'; })
+        .map(function (d) { return { id: d.id, name: names[d.personId], label: d.label, requestedAt: d.requestedAt }; });
+      return out;
+    },
     setPin: function (ctx, actor, a) { return Core.setPin(ctx, actor, a.personId, a.pin); },
     devices: function (ctx, actor) {
       if (actor.role !== 'owner') throw err('FORBIDDEN', 'Only the owner.');
@@ -1584,4 +1617,16 @@ function doPost(e) {
 function doGet() {
   return ContentService.createTextOutput(JSON.stringify({ ok: true, data: { app: 'GJ Leave & Attendance', time: Date.now() } }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Lists every Google service the app will ever use, so Google asks the owner for
+ * permission ONCE (Sheet, email alerts, the private photo folder, timed jobs).
+ */
+function authorizeAll() {
+  SpreadsheetApp.getActiveSpreadsheet().getName();
+  MailApp.getRemainingDailyQuota();
+  DriveApp.getRootFolder().getName();
+  ScriptApp.getProjectTriggers();
+  return 'Authorized.';
 }

@@ -63,6 +63,14 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Karan example verified end to end through real check-ins: Rs 126, 1 violation, record only.
 - Tests: 70 of 70 pass.
 
+### 20 Nov 2026, 16:45 run - phone app (first screens) + demo mode
+- `docs/` (served by GitHub Pages): `index.html`, `styles.css`, `app.js`, `config.js`, `manifest.json`, `icon.svg`. Screens: sign in, Today (check-in/out, going out, late/early), Apply (live result before Send, my requests, cancel), My month (leaves, 2-hour bank, violations, estimate), Approvals (leaves, going out, back confirm with time correction, unannounced absences, new phones), More (owner: create PIN shown once + WhatsApp link; sign out).
+- DEMO mode: while `config.js` has no API_URL the app runs the SAME server modules inside the phone on sample data (every PIN 1234, nothing saved). Lets the owner see the screens before the Apps Script deploy.
+- Checked in a 390x844 phone viewport with Playwright (`tools/ui-check.py`): sign in, phone approval, check-in, apply (auto-approved), my month, emergency request, Aakash approval. 0 console errors.
+- Found by that check and fixed: an uninformed very late arrival turned into a half/full day and lost its violation. Now the "not informed, more than 30 min" violation stays. Test added.
+- Folder is `docs/` (not `web/`) because GitHub Pages serves only the root or `/docs` from a branch.
+- Tests: 72 of 72 pass.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
@@ -72,11 +80,12 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 6. Late / early requests need no approval (the handoff only says "applied in the app"). Aakash gets a notification.
 7. Going-out time is counted from Aakash's APPROVAL time to the staff member's "I'm back" tap.
 8. Leaving before the stated early time: the minutes before the stated time are "not informed" (mirror of the late rule).
-9. A day with more than 2 hours away becomes a half day (0.5 leave) automatically, more than 4 h 30 min a full day. It is counted in the quota only; no violation and no emergency count is added for it.
+9. A day with more than 2 hours away becomes a half day (0.5 leave) automatically, more than 4 h 30 min a full day, counted in the quota. No emergency count is added. If the time was NOT informed and over 30 min, the normal "not informed, more than 30 min" violation still applies.
 10. Absent with no request: counted as 1 leave day + 1 violation. Muskan: recorded only. Aakash and Varun are not tracked.
 11. Shop-closed days are read from Settings `closedDays`; no screen for it yet.
 
 ## Next
 - NEEDS OWNER'S CHROME: create test Sheet "GJ Leave - TEST", Extensions > Apps Script, paste `apps-script/Code.js`, run `setupOrUpgrade`, deploy as web app, Google "Allow".
-- Phone screens in `web/`: login, home (check-in/out, going out), apply form with live result, My month, Aakash pending list.
+- Owner: enable GitHub Pages (Settings > Pages > Deploy from a branch > main > /docs) so the demo opens on his phone.
+- Screens still missing: calendar, month report, settings, restrictions, Today at GJ, camera check-in, disputes, manual violations.
 - Edit-after-approval (back to pending, re-check), manual violations by Aakash with grace table, disputes (24 h), settings API, month lock, 12-person month simulation, email alerts + 2-hour reminder trigger.

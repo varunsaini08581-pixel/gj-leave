@@ -22,3 +22,11 @@ fs.writeFileSync(path.join(root, 'apps-script', 'appsscript.json'), JSON.stringi
   webapp: { executeAs: 'USER_DEPLOYING', access: 'ANYONE_ANONYMOUS' },
 }, null, 2) + '\n');
 console.log('Built apps-script/Code.js (' + out.length + ' bytes)');
+
+// Demo server for the browser: the SAME rule and server modules, on sample data in memory.
+// Used only when docs/config.js has no API_URL. Nothing is saved anywhere.
+let mock = '// GENERATED FILE. Demo mode only: the real server modules running in the browser on sample data.\n';
+for (const file of ORDER.filter(f => !f.startsWith('src/gas/'))) mock += `\n// ===== ${file} =====\n` + fs.readFileSync(path.join(root, file), 'utf8');
+mock += '\n' + fs.readFileSync(path.join(root, 'tools', 'mock-boot.js'), 'utf8');
+fs.writeFileSync(path.join(root, 'docs', 'mock-server.js'), mock);
+console.log('Built docs/mock-server.js (' + mock.length + ' bytes)');

@@ -71,3 +71,15 @@ function doGet() {
   return ContentService.createTextOutput(JSON.stringify({ ok: true, data: { app: 'GJ Leave & Attendance', time: Date.now() } }))
     .setMimeType(ContentService.MimeType.JSON);
 }
+
+/**
+ * Lists every Google service the app will ever use, so Google asks the owner for
+ * permission ONCE (Sheet, email alerts, the private photo folder, timed jobs).
+ */
+function authorizeAll() {
+  SpreadsheetApp.getActiveSpreadsheet().getName();
+  MailApp.getRemainingDailyQuota();
+  DriveApp.getRootFolder().getName();
+  ScriptApp.getProjectTriggers();
+  return 'Authorized.';
+}

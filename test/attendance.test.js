@@ -175,3 +175,12 @@ test('check-in location: flagged when more than 50 m from the shop point', () =>
   assert.equal(Att.checkIn(s.ctx(D, '09:30'), s.actor('Neha'), { lat: 29.1502, lng: 75.7217, accuracy: 10 }).flag, 'outside-shop-area');
   assert.equal(Att.checkIn(s.ctx(D, '09:30'), s.actor('Manish')).flag, 'no-location');
 });
+
+test('3 hours late and not informed: the day becomes a half day AND it is still a violation', () => {
+  const s = seed(); const harsh = s.actor('Harsh');
+  Att.checkIn(s.ctx(D, '13:30'), harsh);
+  const m = Att.myMonth(s.ctx(D, '14:00'), 'harsh', '2026-11');
+  assert.equal(m.leaves.autoHalfDays[0].amount, 0.5);
+  assert.equal(m.bank.used, 0);
+  assert.deepEqual(m.violations.map(v => v.rule), ['not-informed-over-30']);
+});

@@ -290,6 +290,14 @@
       var k = (perEvent[src.id + v.rule] = (perEvent[src.id + v.rule] || 0) + 1);
       wanted['dm:' + src.id + ':' + v.rule + ':' + k] = { rule: v.rule, date: src.date };
     });
+    // A day that became a half/full day is outside the bank, but "not informed and more than
+    // 30 min" is still a violation on that day.
+    var convertedDates = {}; mm.converted.forEach(function (c) { convertedDates[c.date] = true; });
+    ctx.db.rows('DayMinutes').forEach(function (m) {
+      if (m.personId === personId && convertedDates[m.date] && !m.informed && m.minutes > Minutes.DEFAULTS.notInformedMaxMinutes) {
+        wanted['dm:' + m.id + ':not-informed-over-30:1'] = { rule: 'not-informed-over-30', date: m.date };
+      }
+    });
     var existing = ctx.db.rows('Violations').filter(function (v) {
       return v.personId === personId && Cal.monthKey(v.date) === monthKey && String(v.proof).indexOf('dm:') === 0;
     });
