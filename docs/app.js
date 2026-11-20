@@ -112,6 +112,7 @@
       var cards = [h('h1', {}, 'Hello, ' + state.me.name), h('p', { class: 'sub' }, niceDate(t.date) + ' · Duty ' + state.me.dutyStart + '–' + state.me.dutyEnd)];
       var tracked = state.me.role === 'staff';
       if (!tracked && window.GJBoard) cards.push(window.GJBoard());
+      if (tracked && t.hints && t.hints.length) cards.push(h('div', { class: 'card' }, [h('h2', {}, 'This month'), h('ul', { class: 'list' }, t.hints.map(function (x) { return h('li', {}, x); }))]));
       if (tracked) {
         var c = h('div', { class: 'card' }, h('h2', {}, 'Attendance'));
         if (!t.checkIn) {
@@ -152,7 +153,9 @@
     if (!o) {
       var reason = h('input', { placeholder: 'Reason', maxlength: 80 }), mins = h('input', { type: 'number', inputmode: 'numeric', min: 1, max: 120, placeholder: 'Expected minutes' });
       c.appendChild(h('p', { class: 'muted' }, 'Up to 15 min is free. More than 15 min: the whole outing comes from your 2-hour bank.'));
-      c.appendChild(reason); c.appendChild(h('div', { style: 'height:8px' })); c.appendChild(mins);
+      var eff = h('div', {});
+      mins.addEventListener('input', function () { effectInto(eff, { kind: 'out', minutes: +mins.value }); });
+      c.appendChild(reason); c.appendChild(h('div', { style: 'height:8px' })); c.appendChild(mins); c.appendChild(eff);
       c.appendChild(h('div', { class: 'btns' }, button('Ask Aakash', '', function () { return run(api('goingOut', { reason: reason.value, expectedMinutes: +mins.value }), 'Sent to Aakash.').then(VIEWS.home); })));
     } else if (o.status === 'Pending') {
       c.appendChild(h('p', {}, [h('span', { class: 'chip amber' }, 'Pending with Aakash'), ' ' + o.reason]));
@@ -165,6 +168,13 @@
       c.appendChild(button('Remind Aakash', 'small', function () { return run(api('remindBack', { id: o.id }), 'Reminder sent.'); }));
     }
     return c;
+  }
+  var effectTimer;
+  function effectInto(box, args) {
+    clearTimeout(effectTimer);
+    effectTimer = setTimeout(function () {
+      api('effect', args).then(function (r) { box.replaceChildren.apply(box, r.lines.map(function (l) { return h('div', { class: 'warn' }, l); })); }).catch(function () {});
+    }, 350);
   }
   function shortCard(t) {
     var c = h('div', { class: 'card' }, h('h2', {}, 'Late or leaving early'));
@@ -181,7 +191,10 @@
     drawSeg();
     c.appendChild(h('p', { class: 'muted' }, 'Ask before duty start (late) or before you leave (early). After Aakash approves, the minutes are "informed".'));
     c.appendChild(seg); c.appendChild(h('label', {}, 'Date')); c.appendChild(date);
-    c.appendChild(h('label', {}, 'Exact time (arrival or leaving)')); c.appendChild(time);
+    var eff2 = h('div', {});
+    function upd() { if (time.value) effectInto(eff2, { kind: kind, time: time.value, date: date.value }); }
+    time.addEventListener('change', upd); date.addEventListener('change', upd); seg.addEventListener('click', upd);
+    c.appendChild(h('label', {}, 'Exact time (arrival or leaving)')); c.appendChild(time); c.appendChild(eff2);
     c.appendChild(h('div', { class: 'btns' }, button('Ask Aakash', '', function () {
       return run(api('requestShort', { kind: kind, date: date.value, time: time.value })).then(function (r) { toast('Sent to Aakash. ' + r.minutes + ' min.'); VIEWS.home(); });
     })));

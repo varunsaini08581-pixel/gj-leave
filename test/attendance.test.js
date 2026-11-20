@@ -221,3 +221,34 @@ test('a pending late request does not block the partner; an approved one does (c
   Att.decideShort(s.ctx(D, '08:20'), aakash, b.id, true);
   assert.match(code(() => Att.decideShort(s.ctx(D, '08:21'), aakash, p.id, true)), /Not allowed: Bhawna is off/);
 });
+
+test('proactive effect before sending: bank left, exhausted bank in rupees, extra 2 hours warning', () => {
+  const s = seed(); const c = s.ctx(D, '09:00');
+  s.db.insert('PayInfo', { personId: 'harsh', fixedSalary: 17000, targetAllowance: 0, disciplineBonus: 500, dutyHours: 9 });
+  assert.deepEqual(Att.effectOf(c, 'harsh', 'late', 32).lines, ['This uses 22 min. Bank left after this: 98 min.']);
+  assert.deepEqual(Att.effectOf(c, 'harsh', 'late', 8).lines, ['Inside the 10-min grace. Nothing is counted.']);
+  assert.deepEqual(Att.effectOf(c, 'harsh', 'out', 15).lines, ['Up to 15 min is free. Nothing is counted.']);
+  assert.equal(Att.effectOf(c, 'harsh', 'out', 16).counted, 16);
+  assert.match(Att.effectOf(c, 'harsh', 'early', 130).lines[0], /half day/);
+  s.db.insert('DayMinutes', { id: 'a', personId: 'harsh', date: '2026-11-02', kind: 'early', minutes: 110, informed: true, statedMinutes: '', source: 't' });
+  s.db.insert('DayMinutes', { id: 'b', personId: 'harsh', date: '2026-11-03', kind: 'early', minutes: 10, informed: true, statedMinutes: '', source: 't' });
+  const ex = Att.effectOf(c, 'harsh', 'early', 35).lines;
+  assert.equal(ex[0], 'The bank is exhausted: these 35 min \u2248 Rs 37 would be deducted.');
+  assert.equal(ex[1], '85 more min beyond the bank = 1 violation.');
+  s.db.insert('DayMinutes', { id: 'c', personId: 'harsh', date: '2026-11-04', kind: 'early', minutes: 100, informed: true, statedMinutes: '', source: 't' });
+  assert.equal(Att.effectOf(c, 'harsh', 'early', 30).lines[1], 'This crosses an extra 2 hours beyond the bank: 1 violation.');
+});
+
+test('hints on the Today screen: passes left, "the next one is a violation", bonus warning', () => {
+  const s = seed(); const harsh = s.actor('Harsh');
+  assert.deepEqual(Att.hints(s.ctx('2026-11-02', '09:00'), 'harsh'), ['2-hour bank: 120 min left.', 'Not-informed passes: 3 of 3 left.', 'No violation this month.']);
+  ['02', '03', '04', '05'].forEach(d => Att.checkIn(s.ctx('2026-11-' + d, '10:50'), harsh)); // 4 not-informed, 10 counted each
+  const h4 = Att.hints(s.ctx('2026-11-05', '12:00'), 'harsh');
+  assert.equal(h4[0], '2-hour bank: 80 min left.');
+  assert.equal(h4[1], 'You have 4 not-informed times. The next one (no. 5) is a violation. Inform before duty start.');
+  Att.checkIn(s.ctx('2026-11-06', '10:50'), harsh);
+  const h5 = Att.hints(s.ctx('2026-11-06', '12:00'), 'harsh');
+  assert.equal(h5[1], 'You have 5 not-informed times. No. 7 will be a violation.');
+  assert.equal(h5[2], '1 violation (record only). 1 more = Rs 500 discipline bonus and target allowance would be lost.');
+  assert.deepEqual(Att.hints(s.ctx('2026-11-06', '12:00'), 'muskan'), []);
+});

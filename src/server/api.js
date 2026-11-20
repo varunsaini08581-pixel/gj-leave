@@ -58,6 +58,16 @@
       return ctx.db.rows('LeaveRequests').filter(function (r) { return /^(Pending|Special)/.test(r.status); }).map(function (r) { return leaveView(r, names, actor); });
     },
     requestShort: function (ctx, actor, a) { return Att.requestShort(ctx, actor, a); },
+    effect: function (ctx, actor, a) {
+      // Live preview for late / early / going out, shown before the request is sent.
+      var me = ctx.db.rows('People').filter(function (x) { return x.id === actor.id; })[0], minutes = +a.minutes;
+      if (a.kind !== 'out' && /^\d{2}:\d{2}$/.test(a.time || '')) {
+        var t = +a.time.slice(0, 2) * 60 + +a.time.slice(3), s = +me.dutyStart.slice(0, 2) * 60 + +me.dutyStart.slice(3), e = +me.dutyEnd.slice(0, 2) * 60 + +me.dutyEnd.slice(3);
+        minutes = a.kind === 'late' ? t - s : e - t;
+      }
+      if (!(minutes > 0)) return { counted: 0, lines: [] };
+      return Att.effectOf(ctx, actor.id, a.kind, minutes, a.date);
+    },
     decideShort: function (ctx, actor, a) { return Att.decideShort(ctx, actor, a.id, !!a.approve, a.reason); },
     checkIn: function (ctx, actor, a) {
       // The check-in photo is taken inside the app (back camera, landscape) and is required.
@@ -95,7 +105,7 @@
       var punches = mine('Punches');
       var pick = function (kind) { var p = punches.filter(function (x) { return x.kind === kind; })[0]; return p ? { at: p.at, flag: p.flag } : null; };
       var outing = mine('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Approved' || o.status === 'Back'; })[0];
-      return { date: date, serverTime: ctx.now, checkIn: pick('in'), checkOut: pick('out'),
+      return { date: date, serverTime: ctx.now, hints: Att.hints(ctx, actor.id), checkIn: pick('in'), checkOut: pick('out'),
         outing: outing ? { id: outing.id, status: outing.status, reason: outing.reason, approvedAt: outing.approvedAt, backAt: outing.backAt, minutes: outing.minutes } : null,
         shorts: mine('ShortRequests').filter(function (q) { return q.status === 'Pending' || q.status === 'Approved' || q.status === 'Rejected'; })
           .map(function (q) { return { id: q.id, kind: q.kind, time: q.time, status: q.status, decisionReason: q.decisionReason }; }) };

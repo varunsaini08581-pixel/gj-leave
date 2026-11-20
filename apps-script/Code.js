@@ -1373,6 +1373,10 @@
     var dutyHours = (pay && pay.dutyHours) || (hhmmToMin(person.dutyEnd) - hhmmToMin(person.dutyStart)) / 60;
     var run = Minutes.runMonth({ salary: pay ? pay.fixedSalary : 0, dutyHours: dutyHours },
       s.events.map(function (m) { return { kind: m.kind, minutes: m.minutes, informed: m.informed, statedMinutes: (m.statedMinutes === '' || !m.informed) ? undefined : m.statedMinutes }; }));
+    // Informed minutes already beyond the bank (they decide the "extra 2 hours" violations).
+    var used = 0, beyondInformed = 0;
+    run.lines.forEach(function (l, i) { if (s.events[i].informed) beyondInformed += l.beyondBank; used += l.fromBank; });
+    run.beyondInformed = beyondInformed;
     return { run: run, events: s.events, converted: s.converted, pay: pay || null, dutyHours: dutyHours };
   }
 
@@ -1448,6 +1452,48 @@
     };
   }
 
+  // ---------- Proactive warnings (owner wants the person to see the effect BEFORE sending) ----------
+
+  function rupees(mm, minutes) { return mm.pay && mm.pay.fixedSalary ? ' \u2248 Rs ' + Math.round(minutes * mm.run.ratePerMinute) + ' would be deducted' : ' would be deducted'; }
+
+  /** What a late / early / going-out request of N minutes would do to this month. Never writes. */
+  function effectOf(ctx, personId, kind, minutes, date) {
+    var mm = monthMinutes(ctx, personId, Cal.monthKey(date || H.today(ctx)));
+    var counted = kind === 'late' ? Math.max(0, minutes - Minutes.DEFAULTS.lateGraceMinutes) : kind === 'out' ? (minutes <= Minutes.DEFAULTS.outFreeMinutes ? 0 : minutes) : minutes;
+    var left = mm.run.bankLeft, lines = [];
+    if (minutes > Minutes.DEFAULTS.halfDayAfterMinutes) return { counted: 0, lines: ['More than 2 hours in one day is a half day (0.5 leave), not the bank.'] };
+    if (counted === 0) lines.push(kind === 'out' ? 'Up to 15 min is free. Nothing is counted.' : 'Inside the 10-min grace. Nothing is counted.');
+    else if (counted <= left) lines.push('This uses ' + counted + ' min. Bank left after this: ' + (left - counted) + ' min.');
+    else {
+      var beyond = counted - left;
+      lines.push(left > 0 ? 'This uses the last ' + left + ' min of your bank. ' + beyond + ' min are beyond the bank:' + rupees(mm, beyond) + '.'
+        : 'The bank is exhausted: these ' + beyond + ' min' + rupees(mm, beyond) + '.');
+      var before = Math.floor(mm.run.beyondInformed / Minutes.DEFAULTS.extraViolationMinutes), after = Math.floor((mm.run.beyondInformed + beyond) / Minutes.DEFAULTS.extraViolationMinutes);
+      if (after > before) lines.push('This crosses an extra 2 hours beyond the bank: 1 violation.');
+      else lines.push((Minutes.DEFAULTS.extraViolationMinutes - ((mm.run.beyondInformed + beyond) % Minutes.DEFAULTS.extraViolationMinutes)) + ' more min beyond the bank = 1 violation.');
+    }
+    return { counted: counted, bankLeft: Math.max(0, left - counted), lines: lines };
+  }
+
+  /** Short status lines for the Today screen: how to avoid the next violation. */
+  function hints(ctx, personId) {
+    var person = H.find(ctx, 'People', personId);
+    if (!person || person.noApproval) return [];
+    var month = Cal.monthKey(H.today(ctx)), mm = monthMinutes(ctx, personId, month), out = [];
+    var violations = ctx.db.rows('Violations').filter(function (v) { return v.personId === personId && Cal.monthKey(v.date) === month && v.disputeState !== 'removed'; }).length;
+    out.push('2-hour bank: ' + mm.run.bankLeft + ' min left.');
+    var n = mm.run.notInformedCount, passes = Minutes.DEFAULTS.freePasses;
+    if (n < passes) out.push('Not-informed passes: ' + (passes - n) + ' of ' + passes + ' left.');
+    else if ((n + 1 - passes) % Minutes.DEFAULTS.passViolationEvery === 0) out.push('You have ' + n + ' not-informed times. The next one (no. ' + (n + 1) + ') is a violation. Inform before duty start.');
+    else out.push('You have ' + n + ' not-informed times. No. ' + (n + 2) + ' will be a violation.');
+    var bonus = mm.pay ? mm.pay.disciplineBonus : Minutes.DEFAULTS.disciplineBonus;
+    if (violations === 0) out.push('No violation this month.');
+    else if (violations === 1) out.push('1 violation (record only). 1 more = Rs ' + bonus + ' discipline bonus and target allowance would be lost.');
+    else if (violations === 2) out.push('2 violations. 1 more = notice.');
+    else out.push(violations + ' violations: notice stage.');
+    return out;
+  }
+
   // ---------- End of day: absent with no request ----------
 
   /** Run after closing time. Creates "Absent - unannounced" + 1 violation for staff with no request and no check-in. */
@@ -1497,7 +1543,7 @@
   }
 
   var api = { requestShort: requestShort, decideShort: decideShort, checkIn: checkIn, checkOut: checkOut, goingOut: goingOut, decideOuting: decideOuting,
-    imBack: imBack, confirmBack: confirmBack, decideDress: decideDress, manualCheckIn: manualCheckIn, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
+    imBack: imBack, confirmBack: confirmBack, decideDress: decideDress, manualCheckIn: manualCheckIn, effectOf: effectOf, hints: hints, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
     syncViolations: syncViolations };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJAttendance = api;
@@ -2115,6 +2161,16 @@
       return ctx.db.rows('LeaveRequests').filter(function (r) { return /^(Pending|Special)/.test(r.status); }).map(function (r) { return leaveView(r, names, actor); });
     },
     requestShort: function (ctx, actor, a) { return Att.requestShort(ctx, actor, a); },
+    effect: function (ctx, actor, a) {
+      // Live preview for late / early / going out, shown before the request is sent.
+      var me = ctx.db.rows('People').filter(function (x) { return x.id === actor.id; })[0], minutes = +a.minutes;
+      if (a.kind !== 'out' && /^\d{2}:\d{2}$/.test(a.time || '')) {
+        var t = +a.time.slice(0, 2) * 60 + +a.time.slice(3), s = +me.dutyStart.slice(0, 2) * 60 + +me.dutyStart.slice(3), e = +me.dutyEnd.slice(0, 2) * 60 + +me.dutyEnd.slice(3);
+        minutes = a.kind === 'late' ? t - s : e - t;
+      }
+      if (!(minutes > 0)) return { counted: 0, lines: [] };
+      return Att.effectOf(ctx, actor.id, a.kind, minutes, a.date);
+    },
     decideShort: function (ctx, actor, a) { return Att.decideShort(ctx, actor, a.id, !!a.approve, a.reason); },
     checkIn: function (ctx, actor, a) {
       // The check-in photo is taken inside the app (back camera, landscape) and is required.
@@ -2152,7 +2208,7 @@
       var punches = mine('Punches');
       var pick = function (kind) { var p = punches.filter(function (x) { return x.kind === kind; })[0]; return p ? { at: p.at, flag: p.flag } : null; };
       var outing = mine('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Approved' || o.status === 'Back'; })[0];
-      return { date: date, serverTime: ctx.now, checkIn: pick('in'), checkOut: pick('out'),
+      return { date: date, serverTime: ctx.now, hints: Att.hints(ctx, actor.id), checkIn: pick('in'), checkOut: pick('out'),
         outing: outing ? { id: outing.id, status: outing.status, reason: outing.reason, approvedAt: outing.approvedAt, backAt: outing.backAt, minutes: outing.minutes } : null,
         shorts: mine('ShortRequests').filter(function (q) { return q.status === 'Pending' || q.status === 'Approved' || q.status === 'Rejected'; })
           .map(function (q) { return { id: q.id, kind: q.kind, time: q.time, status: q.status, decisionReason: q.decisionReason }; }) };

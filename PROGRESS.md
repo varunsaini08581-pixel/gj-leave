@@ -111,6 +111,11 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - BLOCKED: the new server code is saved in the Apps Script editor but Google asks the owner for one more permission (new code uses Session email + email sending). Dialog left open in his Chrome. Until he allows and a new version is deployed, the live test site talks to server version 1 and the new screens answer 'Unknown action'.
 - Tests: 105 pass.
 
+### 20 Nov 2026, 17:25 IST
+- Before sending a late / early / going-out request the person sees the effect: minutes used and bank left, or 'the bank is exhausted: these N min = Rs X would be deducted', and how close the next 'extra 2 hours' violation is. Today screen shows This month hints: bank left, not-informed passes left or 'the next one is a violation', and the bonus / notice warning.
+- Owner allowed the new Google permission (17:25).
+- Tests: 107 pass. Both phone checks pass with 0 console errors.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.

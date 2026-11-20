@@ -359,6 +359,10 @@
     var dutyHours = (pay && pay.dutyHours) || (hhmmToMin(person.dutyEnd) - hhmmToMin(person.dutyStart)) / 60;
     var run = Minutes.runMonth({ salary: pay ? pay.fixedSalary : 0, dutyHours: dutyHours },
       s.events.map(function (m) { return { kind: m.kind, minutes: m.minutes, informed: m.informed, statedMinutes: (m.statedMinutes === '' || !m.informed) ? undefined : m.statedMinutes }; }));
+    // Informed minutes already beyond the bank (they decide the "extra 2 hours" violations).
+    var used = 0, beyondInformed = 0;
+    run.lines.forEach(function (l, i) { if (s.events[i].informed) beyondInformed += l.beyondBank; used += l.fromBank; });
+    run.beyondInformed = beyondInformed;
     return { run: run, events: s.events, converted: s.converted, pay: pay || null, dutyHours: dutyHours };
   }
 
@@ -434,6 +438,48 @@
     };
   }
 
+  // ---------- Proactive warnings (owner wants the person to see the effect BEFORE sending) ----------
+
+  function rupees(mm, minutes) { return mm.pay && mm.pay.fixedSalary ? ' \u2248 Rs ' + Math.round(minutes * mm.run.ratePerMinute) + ' would be deducted' : ' would be deducted'; }
+
+  /** What a late / early / going-out request of N minutes would do to this month. Never writes. */
+  function effectOf(ctx, personId, kind, minutes, date) {
+    var mm = monthMinutes(ctx, personId, Cal.monthKey(date || H.today(ctx)));
+    var counted = kind === 'late' ? Math.max(0, minutes - Minutes.DEFAULTS.lateGraceMinutes) : kind === 'out' ? (minutes <= Minutes.DEFAULTS.outFreeMinutes ? 0 : minutes) : minutes;
+    var left = mm.run.bankLeft, lines = [];
+    if (minutes > Minutes.DEFAULTS.halfDayAfterMinutes) return { counted: 0, lines: ['More than 2 hours in one day is a half day (0.5 leave), not the bank.'] };
+    if (counted === 0) lines.push(kind === 'out' ? 'Up to 15 min is free. Nothing is counted.' : 'Inside the 10-min grace. Nothing is counted.');
+    else if (counted <= left) lines.push('This uses ' + counted + ' min. Bank left after this: ' + (left - counted) + ' min.');
+    else {
+      var beyond = counted - left;
+      lines.push(left > 0 ? 'This uses the last ' + left + ' min of your bank. ' + beyond + ' min are beyond the bank:' + rupees(mm, beyond) + '.'
+        : 'The bank is exhausted: these ' + beyond + ' min' + rupees(mm, beyond) + '.');
+      var before = Math.floor(mm.run.beyondInformed / Minutes.DEFAULTS.extraViolationMinutes), after = Math.floor((mm.run.beyondInformed + beyond) / Minutes.DEFAULTS.extraViolationMinutes);
+      if (after > before) lines.push('This crosses an extra 2 hours beyond the bank: 1 violation.');
+      else lines.push((Minutes.DEFAULTS.extraViolationMinutes - ((mm.run.beyondInformed + beyond) % Minutes.DEFAULTS.extraViolationMinutes)) + ' more min beyond the bank = 1 violation.');
+    }
+    return { counted: counted, bankLeft: Math.max(0, left - counted), lines: lines };
+  }
+
+  /** Short status lines for the Today screen: how to avoid the next violation. */
+  function hints(ctx, personId) {
+    var person = H.find(ctx, 'People', personId);
+    if (!person || person.noApproval) return [];
+    var month = Cal.monthKey(H.today(ctx)), mm = monthMinutes(ctx, personId, month), out = [];
+    var violations = ctx.db.rows('Violations').filter(function (v) { return v.personId === personId && Cal.monthKey(v.date) === month && v.disputeState !== 'removed'; }).length;
+    out.push('2-hour bank: ' + mm.run.bankLeft + ' min left.');
+    var n = mm.run.notInformedCount, passes = Minutes.DEFAULTS.freePasses;
+    if (n < passes) out.push('Not-informed passes: ' + (passes - n) + ' of ' + passes + ' left.');
+    else if ((n + 1 - passes) % Minutes.DEFAULTS.passViolationEvery === 0) out.push('You have ' + n + ' not-informed times. The next one (no. ' + (n + 1) + ') is a violation. Inform before duty start.');
+    else out.push('You have ' + n + ' not-informed times. No. ' + (n + 2) + ' will be a violation.');
+    var bonus = mm.pay ? mm.pay.disciplineBonus : Minutes.DEFAULTS.disciplineBonus;
+    if (violations === 0) out.push('No violation this month.');
+    else if (violations === 1) out.push('1 violation (record only). 1 more = Rs ' + bonus + ' discipline bonus and target allowance would be lost.');
+    else if (violations === 2) out.push('2 violations. 1 more = notice.');
+    else out.push(violations + ' violations: notice stage.');
+    return out;
+  }
+
   // ---------- End of day: absent with no request ----------
 
   /** Run after closing time. Creates "Absent - unannounced" + 1 violation for staff with no request and no check-in. */
@@ -483,7 +529,7 @@
   }
 
   var api = { requestShort: requestShort, decideShort: decideShort, checkIn: checkIn, checkOut: checkOut, goingOut: goingOut, decideOuting: decideOuting,
-    imBack: imBack, confirmBack: confirmBack, decideDress: decideDress, manualCheckIn: manualCheckIn, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
+    imBack: imBack, confirmBack: confirmBack, decideDress: decideDress, manualCheckIn: manualCheckIn, effectOf: effectOf, hints: hints, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
     syncViolations: syncViolations };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJAttendance = api;
