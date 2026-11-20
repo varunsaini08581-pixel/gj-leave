@@ -74,7 +74,7 @@
       if (q.status !== 'Pending') return;
       var last = q.remindedAt || q.submittedAt;
       if (ctx.now - last < gap) return;
-      H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'reminder', 'Reminder: late / early request waiting', names[q.personId] + ': ' + q.date + ' ' + q.time, q.id); });
+      H.deciders(ctx).forEach(function (m) { H.notify(ctx, m.id, 'reminder', 'Reminder: late / early request waiting', names[q.personId] + ': ' + q.date + ' ' + q.time, q.id); });
       ctx.db.update('ShortRequests', q.id, { remindedAt: ctx.now });
       n += 1;
     });
@@ -93,6 +93,10 @@
         n += once(ctx, p.id, 'warn-bank0', month, '2-hour bank is used up', 'Every extra 2 hours beyond the bank = 1 violation.') ? 1 : 0;
       if (m.bank.passesUsed >= m.bank.passes)
         n += once(ctx, p.id, 'warn-passes', month, 'All 3 not-informed passes are used', 'After the passes, every 2nd not-informed time is a violation.') ? 1 : 0;
+      // After the passes, every 2nd not-informed time is a violation: say so the time before.
+      var ni = m.bank.notInformed || 0;
+      if (ni >= m.bank.passes && (ni + 1 - m.bank.passes) % 2 === 0)
+        n += once(ctx, p.id, 'warn-next', month + ':' + ni, 'The next not-informed time is a violation', 'You have ' + ni + ' not-informed times this month. Inform in the app before duty start (late) or before you leave (early).') ? 1 : 0;
       if (m.ladder.violations === 1)
         n += once(ctx, p.id, 'warn-v1', month, '1 violation this month', '1 more violation = discipline bonus and target allowance would be lost.') ? 1 : 0;
       if (m.ladder.violations === 2)
@@ -110,7 +114,7 @@
   function eveningBefore(ctx) {
     var tomorrow = Cal.addDays(H.today(ctx), 1), n = 0;
     ctx.db.rows('LeaveRequests').forEach(function (r) {
-      if (r.status === 'Approved' && r.dates[0] === tomorrow) n += once(ctx, r.personId, 'leave-tomorrow', r.id, 'Your leave starts tomorrow', H.niceDates(r.dates) + (r.kind === 'half' ? ' (half day from ' + r.halfStart + ')' : '')) ? 1 : 0;
+      if ((r.status === 'Approved' || r.status === 'Recorded') && r.route !== 'system' && r.dates[0] === tomorrow) n += once(ctx, r.personId, 'leave-tomorrow', r.id, 'Your leave starts tomorrow', H.niceDates(r.dates) + (r.kind === 'half' ? ' (half day from ' + r.halfStart + ')' : '')) ? 1 : 0;
     });
     return n;
   }

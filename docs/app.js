@@ -497,10 +497,12 @@
             button('Dismiss', 'good', function () { return run(api('decideDress', { id: d.id, confirm: false }), 'Dismissed.').then(VIEWS.approve); })])]));
       });
       a.absences.forEach(function (r) {
-        var why = h('input', { placeholder: 'Reason for excusing', maxlength: 120 });
+        var why = h('input', { placeholder: 'Reason (required to excuse or take back)', maxlength: 120 });
         cards.push(h('div', { class: 'card' }, [h('div', { class: 'row' }, [h('strong', {}, r.name), h('span', { class: 'chip red' }, 'Absent – unannounced')]), h('p', {}, niceDates(r.dates) + ' · 1 violation recorded'), why,
           h('div', { class: 'btns' }, [button('Humanitarian – excused', '', function () { return run(api('excuseAbsence', { id: r.id, reason: why.value }), 'Excused.').then(VIEWS.approve); }),
-            button('Keep as absent', '', function () { return run(api('keepAbsent', { id: r.id }), 'Kept as absent.').then(VIEWS.approve); })])]));
+            button('Keep as absent', '', function () { return run(api('keepAbsent', { id: r.id }), 'Kept as absent.').then(VIEWS.approve); }),
+            button('Was at work: take back', '', function () { return run(api('cancelLeave', { id: r.id, reason: why.value }), 'Absence taken back. Enter the check-in under More.').then(VIEWS.approve); })]),
+          h('p', { class: 'muted' }, 'Excused: the violation goes, the day stays a leave day. Taken back: the person was at work (phone or app problem); write the reason above.')]));
       });
       a.devices.forEach(function (d) {
         cards.push(h('div', { class: 'card' }, [h('div', { class: 'row' }, [h('strong', {}, d.name + ' · New phone'), h('span', { class: 'chip amber' }, 'Pending')]), h('p', { class: 'muted' }, d.label),

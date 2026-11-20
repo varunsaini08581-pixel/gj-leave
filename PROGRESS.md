@@ -173,6 +173,9 @@ BUG ROUND 7 (edge cases: boundaries, runs, people and rule changes, thresholds, 
 ### 20 Nov 2026, 19:13 IST
 Two screens the server already supported: 'Staff leaves: cancel or shorten' for Aakash and Varun (a leave not started is cancelled, a running one is shortened and the days taken stay, with a reason), and 'Change people' on a clash rule for Varun (members and minimum present; a leaver is taken out here). Checked at phone size (tools/ui-check3.py). 263 tests pass.
 
+### 20 Nov 2026, 19:23 IST
+BUG ROUND 8 (independent simulation with its own hand count: 3 shop days, a full month for 11 people with all jobs every day, the first days of the next month, and the owner's six worked examples driven as real check-ins and requests): 0 Critical, 1 High, 6 Medium, 4 Low. 586 hand-counted values compared; 564 matched, the other 22 are the findings. All six worked examples exact; no salary or reason leak in about 3,000 staff replies; no duplicate or lost rows; jobs run twice change nothing; same result with the cache on and off. All 11 fixed (test/round8.test.js); the reviewer's simulations are now part of the suite (test/sim-round8.test.js, 16 tests). Fixes: a person who was at work but could not check in can be put right (absence taken back, by hand or by entering the check-in, for any open day); a violation removed by Varun after a dispute never comes back; Varun is told about going-out and late / early requests while Aakash is on leave; ending a running leave at noon no longer makes today an absence; a leave across a locked month end can be shortened; undecided requests are closed with the month lock; withdrawn violations are announced; violation alerts name the person; retries of a correction or restriction store one row; the daily summary no longer calls a roster-off helper late; Muskan gets the evening-before reminder; 'the next not-informed time is a violation' alert. 293 tests pass. ROUND TREND (Critical/High): R1 2/4, R2 1/2, R3 1/4, R4 0/1, R5 0/1, R6 0/3, R7 0/2, R8 0/1. TEST server runs version 10 (round 7 state); this commit is not deployed yet (no schema change).
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
@@ -222,6 +225,11 @@ Two screens the server already supported: 'Staff leaves: cancel or shorten' for 
 45. Emergencies are numbered among the granted ones in the order granted, and numbered again when one is cancelled.
 46. An outing counts only the minutes inside duty hours; it cannot be approved after the person has checked out.
 47. The per-day clash rule (assumption 1) is strict, and round 7 showed its effects: on a 1st-4th Sunday nobody in Calls, Repair or Sales can ask for a late arrival or an outing; one person's lateness blocks the pool partner's requests that day. This follows the owner's "per day" decision; flagged to him again. TO CONFIRM.
+48. An absence the evening job recorded for someone who was at work (dead phone, app down) can be taken back by Aakash or Varun with a reason, and is taken back automatically when Aakash enters the check-in for that day (a check-in can now be entered for any day of an open month).
+49. When Aakash ends a running leave, today stays a leave day if duty has begun and the person has not come in; a past day on which the person did check in is given back.
+50. A request of a month that nobody decided is closed when the month is locked (its days stay in the locked result as "counted, not decided").
+51. Whoever was told "Violation recorded" is also told "Violation withdrawn". A violation Varun removed after a dispute is never recorded again.
+52. OPEN, found by round 8, for the owner: (a) going out over 15 minutes: handoff 3.5 says the WHOLE outing comes from the bank (built this way), but the examples in 3.8 and 3.10 say "42 min (27 from bank)", i.e. the first 15 free. (b) Reminders every 2 hours also run through the night. (c) The evening-before reminder goes out once at about 19:00.
 
 ## Next
 - Owner still to answer: late/early request still PENDING when the person arrives - is "approved later = informed, rejected = not informed" right? (built this way)

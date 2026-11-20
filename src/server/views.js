@@ -29,7 +29,7 @@
       var state = Cal.isRosterOff(p, date) ? 'Roster off' : leave && leave.kind === 'full' ? (leave.route === 'system' ? 'Absent' : 'On leave') : pout ? 'Checked out' : outing ? 'Out right now'
         : pin ? 'In' : now > start + 10 ? 'Not in yet – late' : 'Not in yet';
       return { id: p.id, name: p.name, group: p.group, state: state, dutyStart: p.dutyStart, dueAt: start, checkInAt: pin ? pin.at : '', checkOutAt: pout ? pout.at : '',
-        lateMinutes: pin ? Att.uncovered(start, istMin(pin.at), day.win) : (state.indexOf('late') !== -1 ? now - start : 0), photoId: pin ? pin.photoId : '', flag: pin ? pin.flag : '',
+        lateMinutes: Cal.isRosterOff(p, date) || (leave && leave.kind === 'full') ? 0 : pin ? Att.uncovered(start, istMin(pin.at), day.win) : (state.indexOf('late') !== -1 ? now - start : 0), photoId: pin ? pin.photoId : '', flag: pin ? pin.flag : '',
         halfDay: leave && leave.kind === 'half' ? leave.halfStart : '', outSince: outing ? outing.approvedAt : '' };
     }) };
   }
@@ -143,8 +143,17 @@
         others.forEach(function (o) { H.notify(ctx, o.id, 'month', 'Month report ready to lock: ' + monthKey, actor.name + ' has confirmed it. Check the report and lock it.', monthKey); });
         return { month: monthKey, locked: false, waitingFor: others.map(function (o) { return o.name; }) };
       }
-      staffForMonth(ctx, monthKey).forEach(function (p) {
-        ctx.db.insert('MonthSheet', { id: ctx.env.randomId(), month: monthKey, personId: p.id, result: Att.myMonth(ctx, p.id, monthKey), lockedBy: actor.id, lockedAt: ctx.now });
+      var people = staffForMonth(ctx, monthKey), results = people.map(function (p) { return Att.myMonth(ctx, p.id, monthKey); });
+      // A request of this month that nobody decided is closed with the month (its days are in the locked
+      // result as "counted, not decided"); it must not wait, and remind Aakash, for ever.
+      ctx.db.rows('LeaveRequests').forEach(function (r) {
+        if (!H.OPEN[r.status] || !r.dates.every(function (d) { return Cal.monthKey(d) === monthKey; })) return;
+        ctx.db.update('LeaveRequests', r.id, { status: 'Cancelled', decisionReason: 'Not decided before ' + monthKey + ' was locked', decidedBy: actor.id, decidedAt: ctx.now,
+          history: r.history.concat([{ at: ctx.now, by: actor.id, action: 'closed with the month lock' }]) });
+        H.notify(ctx, r.personId, 'decision', 'Leave request closed', H.niceDates(r.dates) + ' was not decided before the month was locked. Ask Aakash if a correction is needed.', r.id);
+      });
+      people.forEach(function (p, i) {
+        ctx.db.insert('MonthSheet', { id: ctx.env.randomId(), month: monthKey, personId: p.id, result: results[i], lockedBy: actor.id, lockedAt: ctx.now });
       });
       H.audit(ctx, actor.id, 'month.lock', monthKey);
       H.byRole(ctx, 'owner').concat(H.byRole(ctx, 'manager')).forEach(function (m) { if (m.id !== actor.id) H.notify(ctx, m.id, 'month', 'Month locked: ' + monthKey, 'Locked by ' + actor.name, monthKey); });
@@ -159,6 +168,8 @@
       if (!lockedMonths(ctx)[monthKey]) H.fail('BLOCKED', 'This month is not locked. Change the entry itself.');
       if (!String(note || '').trim()) H.fail('REASON', 'Write the correction.');
       var names = {}; ctx.db.rows('People').forEach(function (p) { names[p.id] = p.name; });
+      var twice = ctx.db.rows('MonthSheet').some(function (m) { return m.month === monthKey && m.personId === 'correction' && m.result && m.result.personId === personId && m.result.note === String(note).trim() && m.lockedBy === actor.id; });
+      if (twice) return { ok: true, repeated: true }; // the same correction sent again (a retry) is one correction
       ctx.db.insert('MonthSheet', { id: ctx.env.randomId(), month: monthKey, personId: 'correction',
         result: { personId: personId, name: names[personId] || '', note: String(note).trim(), by: actor.name, at: ctx.now }, lockedBy: actor.id, lockedAt: ctx.now });
       H.audit(ctx, actor.id, 'month.correction', monthKey, { personId: personId, note: note });

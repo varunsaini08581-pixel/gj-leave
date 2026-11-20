@@ -95,10 +95,10 @@
 
   V.manualin = function () {
     run(api('incidentItems')).then(function (d) {
-      var who = h('select', {}, d.people.map(function (p) { return h('option', { value: p.id }, p.name); })), time = h('input', { type: 'time' }), why = h('input', { placeholder: 'Why could the person not check in?', maxlength: 120 }), out = h('div', {});
-      show([back(), h('h1', {}, 'Enter a check-in'), h('p', { class: 'sub' }, 'Only when the phone or camera failed. It is labelled "entered by ' + state.me.name + '" and has no photo.'),
-        h('div', { class: 'card' }, [field('Staff member', who), field('Arrival time today', time), field('Reason', why), h('div', { class: 'btns' }, button('Save check-in', 'primary', function () {
-          return run(api('manualCheckIn', { personId: who.value, time: time.value, reason: why.value })).then(function (r) { out.replaceChildren(h('div', { class: 'result green' }, 'Saved. ' + (r.lateMinutes > 10 ? r.lateMinutes + ' min late.' : 'On time.'))); });
+      var who = h('select', {}, d.people.map(function (p) { return h('option', { value: p.id }, p.name); })), day = h('input', { type: 'date', value: A.todayStr(), max: A.todayStr() }), time = h('input', { type: 'time' }), why = h('input', { placeholder: 'Why could the person not check in?', maxlength: 120 }), out = h('div', {});
+      show([back(), h('h1', {}, 'Enter a check-in'), h('p', { class: 'sub' }, 'Only when the phone or camera failed. It is labelled "entered by ' + state.me.name + '" and has no photo. If the evening job already marked the person absent for that day, the absence and its violation are taken back.'),
+        h('div', { class: 'card' }, [field('Staff member', who), field('Date', day), field('Arrival time', time), field('Reason', why), h('div', { class: 'btns' }, button('Save check-in', 'primary', function () {
+          return run(api('manualCheckIn', { personId: who.value, date: day.value, time: time.value, reason: why.value })).then(function (r) { out.replaceChildren(h('div', { class: 'result green' }, 'Saved. ' + (r.lateMinutes > 10 ? r.lateMinutes + ' min late.' : 'On time.'))); });
         })), out])]);
     }).catch(function () {});
   };

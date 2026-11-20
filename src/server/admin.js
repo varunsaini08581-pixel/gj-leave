@@ -125,21 +125,23 @@
       var r = H.find(ctx, 'LeaveRequests', id);
       if (!r || !(r.status === 'Approved' || H.OPEN[r.status]) || r.route === 'system' || r.route === 'override') H.fail('NOT_FOUND', 'This request cannot be edited.');
       if (r.personId !== actor.id && actor.role === 'staff') H.fail('FORBIDDEN', 'You can edit only your own request.');
-      H.assertOpen(ctx, r.dates);
+      // Days of a locked month that the request already has may stay; only what changes must lie in an open month.
+      var newDates = Array.isArray(input.dates) ? input.dates : [];
+      H.assertOpen(ctx, r.dates.filter(function (d) { return newDates.indexOf(d) === -1; }).concat(newDates.filter(function (d) { return r.dates.indexOf(d) === -1; })));
       var person = H.find(ctx, 'People', r.personId);
       if (ctx.now >= Core.toMs(r.dates[0], r.kind === 'half' ? r.halfStart : person.dutyStart) && actor.role === 'staff') H.fail('FORBIDDEN', 'This leave has started. Ask Aakash or Varun.');
       // A recorded phone call keeps its time when Aakash or Varun corrects the entry for the same first day.
       // The notice for the first day was given when the request was first sent (or when the recorded call was made).
       // Changing the end, the reason or the kind does not make that day a late request.
       var sameStart = Array.isArray(input.dates) && input.dates.slice().sort()[0] === r.dates[0];
-      var keep = sameStart ? { at: r.noticeAt || r.submittedAt } : null;
+      var keep = sameStart ? { at: r.noticeAt || r.submittedAt, had: r.dates } : { had: r.dates };
       var ev = H.evaluate(ctx, person, input, id, keep);
       if (ev.decision === 'blocked') H.fail('BLOCKED', ev.reasons.join(' '));
       // Handoff Part 6: an edit after approval goes back to pending. It is never approved again by the system.
       if (r.status === 'Approved' && ev.decision === 'auto') { ev.decision = 'aakash'; ev.reasons = ['Edited after approval.']; }
       // Violations that came from the old version are withdrawn; the new version earns its own.
       var patch = { kind: input.kind, dates: ev.dates, halfStart: input.halfStart || '', reasonCode: input.reasonCode, reasonText: String(input.reasonText).trim(),
-        submittedAt: ctx.now, noticeAt: keep ? keep.at : '', type: ev.type, noticeHours: ev.noticeHours, run: ev.run, route: ev.decision, status: H.STATUS_FOR[ev.decision],
+        submittedAt: ctx.now, noticeAt: keep.at || '', type: ev.type, noticeHours: ev.noticeHours, run: ev.run, route: ev.decision, status: H.STATUS_FOR[ev.decision],
         approvals: ev.decision === 'special' ? { aakash: '', varun: '' } : {}, extremeEmergency: !!input.extremeEmergency, emergencyNo: ev.emergencyNo,
         penaltyEmergency: ev.penaltyEmergency, restrictionViolation: ev.restrictionViolation, decidedAt: '', decidedBy: '', decisionReason: '',
         history: r.history.concat([{ at: ctx.now, by: actor.id, action: 'edited', from: { dates: r.dates, kind: r.kind, status: r.status } }]) };
@@ -323,6 +325,9 @@
       if (list && JSON.stringify(list) === JSON.stringify(usual)) list = null;
       var clean = { from: r.from, to: r.to, note: String(r.note).trim(), rule: r.rule, appliesTo: list, on: r.on !== false };
       if (old) { ctx.db.update('Restrictions', r.id, clean); H.audit(ctx, actor.id, 'restrictions.update', r.id, clean); return { id: r.id }; }
+      // The same new restriction sent twice (a retry) is one restriction.
+      var twin = ctx.db.rows('Restrictions').filter(function (x) { return x.from === clean.from && x.to === clean.to && x.note === clean.note && x.rule === clean.rule && x.on !== false && JSON.stringify(x.appliesTo || null) === JSON.stringify(clean.appliesTo); })[0];
+      if (twin) return { id: twin.id, repeated: true };
       var id = 'R' + ctx.env.randomId().slice(0, 6);
       ctx.db.insert('Restrictions', Object.assign({ id: id, createdBy: actor.id, createdAt: ctx.now }, clean));
       H.audit(ctx, actor.id, 'restrictions.create', id, clean);
