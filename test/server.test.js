@@ -43,7 +43,9 @@ test('owner bootstrap: only the very first owner phone is approved automatically
   const s = seed(); const c = s.ctx('2026-11-20', '10:00');
   s.db.update('People', 'varun', { pinSalt: 'x', pinHash: require('./helpers.js').env.sha256('x:9999') });
   assert.equal(Core.login(c, 'varun', '9999').deviceStatus, 'approved');
-  assert.equal(Core.login(c, 'varun', '9999').deviceStatus, 'pending');
+  // Round 14 M2: the SAME phone repeating its first sign-in within minutes gets back in; any other phone waits.
+  assert.equal(Core.login(c, 'varun', '9999').deviceStatus, 'approved');
+  assert.equal(Core.login(c, 'varun', '9999', null, 'Another phone').deviceStatus, 'pending');
 });
 
 test('auto-approved: 1 day, 48 h notice, no clash, inside the 5, no violation', () => {

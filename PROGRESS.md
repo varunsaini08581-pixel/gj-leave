@@ -183,6 +183,9 @@ Rounds 9 (0/1/7/5) and 10 (0/1/3/3) fixed: 26 reproducers pass, 319 tests. Owner
 ### 20 Nov 2026, 20:34 IST
 Rounds 11 (0/1/9/4) and 12 (0/1/5/10) fixed: 42 reproducers pass (2 round-12 tests adjusted with reasons: L3 offline sign-out, L9 photo removed not avoided), 361 tests. Server version 9.
 
+### 20 Nov 2026, 21:26 IST
+Rounds 13 (0/2/5/3) and 14 (0/0/5/9) fixed: 36 reproducers pass (2 test set-ups repaired, reasons in the files), 397 tests. Server version 9.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
@@ -250,6 +253,11 @@ Rounds 11 (0/1/9/4) and 12 (0/1/5/10) fixed: 42 reproducers pass (2 round-12 tes
 63. OPEN, for the owner (round 12 H1): the owner could lock himself out (new or lost phone: only the owner can approve phones). Built: (a) the phone keeps one approval per person, so trying a staff account on the owner's phone loses nothing; (b) Aakash can approve ONLY the owner's own new phone request (right PIN already entered), the owner is alerted; (c) `resetOwnerPhones` can be run by hand in the Apps Script editor. To confirm with the owner: is (b) acceptable, or editor-only recovery?
 64. "Sign out" with no connection does not sign out (the server could not be told); the app says so. A photo uploaded for a check-in that is then refused is moved to the Drive bin.
 65. A first sign-in repeated from the same phone is the same request (new token), not a second one. Changed rows are written before new rows (alerts), so a Sheet failure cannot announce a change that was not saved.
+66. Coming in late counts as "informed" because of a leave ONLY when that leave was taken back on that same day by Aakash or Varun (cancel, shorten, move, rule change). A leave the person cancelled, or one taken back on an earlier day, leaves an ordinary working day (round 13 R13-1; narrows 62).
+67. Every change to a leave counts its days again (cancel, shorten, edit old and new days, override, rule change, closed day added or removed, corrected back time). Minutes set aside while a leave covers the time keep what they were ("[was N]" in the note) and come back in the same pieces, informed or not.
+68. "Records only" (no approval needed) is judged by the day: switching it on or off does not add or remove violations of earlier days. A closed day removed after the day is over gets its absent check then. The month lock runs the absent check of the month's last 7 days itself, and one person can lock when the other role has no active person.
+69. A write to the Sheet that fails half-way puts the rows it had already changed back as they were, so a failed action can simply be tapped again (changed rows first, new rows last).
+70. Phones: a repeated first sign-in keeps one request but says so on the card, in Audit and by an alert; the owner's very first sign-in repeated within 15 minutes from the same phone (no other phone exists yet) gets back in; `resetOwnerPhones` also clears wrong-PIN locks on the owner. Staff: at most 6 leave requests a day. An e-mail that keeps failing is given up after 5 tries (in-app alert stays).
 
 ## Next
 - Owner still to answer: late/early request still PENDING when the person arrives - is "approved later = informed, rejected = not informed" right? (built this way)

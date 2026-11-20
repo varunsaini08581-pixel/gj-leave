@@ -153,10 +153,12 @@
         penaltyEmergency: ev.penaltyEmergency, restrictionViolation: ev.restrictionViolation, decidedAt: '', decidedBy: '', decisionReason: '',
         history: H.hist(r.history, [{ at: ctx.now, by: actor.id, action: 'edited', from: { first: r.dates[0], last: r.dates[r.dates.length - 1], days: r.dates.length, kind: r.kind, status: r.status } }]) };
       if (ev.decision === 'auto' || ev.decision === 'recorded') { patch.decidedAt = ctx.now; patch.decidedBy = 'system'; }
+      var oldDates = r.dates.slice();
       ctx.db.update('LeaveRequests', id, patch);
       // The violations of the old version stand until the new version is decided (granted now, or by Aakash later).
       if (patch.status === 'Approved' || patch.status === 'Recorded') H.onGranted(ctx, Object.assign({}, r, patch));
       else H.syncLeaveViolations(ctx, r.personId);
+      oldDates.concat(ev.dates).forEach(function (d) { if (H.hooks.recountDay) H.hooks.recountDay(ctx, r.personId, d); });
       if (ev.decision === 'aakash' || ev.decision === 'special') H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'approval', 'Leave request edited', person.name + ': ' + H.niceDates(ev.dates), id); });
       if (ev.decision === 'varun' || ev.decision === 'special') H.byRole(ctx, 'owner').forEach(function (o) { H.notify(ctx, o.id, 'approval', 'Leave request edited', person.name + ': ' + H.niceDates(ev.dates), id); });
       H.audit(ctx, actor.id, 'leave.edit', id, { status: patch.status });
@@ -188,6 +190,9 @@
         decidedBy: actor.id, decisionReason: 'Override by Varun: ' + String(input.overrideReason).trim(), history: [{ at: ctx.now, by: actor.id, action: 'override' }],
         override: String(input.overrideReason).trim() };
       ctx.db.insert('LeaveRequests', row);
+      // The person may already have come in on one of these days: nothing is counted on a full-leave day.
+      H.syncLeaveViolations(ctx, person.id);
+      dates.forEach(function (d) { if (H.hooks.recountDay) H.hooks.recountDay(ctx, person.id, d); });
       H.audit(ctx, actor.id, 'leave.override', row.id, { reason: row.override, dates: dates });
       H.notify(ctx, person.id, 'decision', 'Leave: Approved', H.niceDates(dates), row.id);
       H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'override', 'Override by Varun', person.name + ': ' + H.niceDates(dates), row.id); });
@@ -234,10 +239,10 @@
         if (existing.name !== clean.name) renameEverywhere(ctx, actor, existing.name, clean.name);
         // The roster and the active state as they were until yesterday are kept, so days already gone are
         // never judged again by what Settings say from today on.
-        var changed = JSON.stringify(existing.sundayOff) !== JSON.stringify(clean.sundayOff) || (existing.active !== false) !== (clean.active !== false);
+        var changed = JSON.stringify(existing.sundayOff) !== JSON.stringify(clean.sundayOff) || (existing.active !== false) !== (clean.active !== false) || !!existing.noApproval !== !!clean.noApproval;
         if (changed) {
           var past = Array.isArray(existing.history) ? existing.history.slice() : [], until = Cal.addDays(H.today(ctx), -1);
-          if (!past.length || past[past.length - 1].until < until) past.push({ until: until, sundayOff: existing.sundayOff, active: existing.active !== false });
+          if (!past.length || past[past.length - 1].until < until) past.push({ until: until, sundayOff: existing.sundayOff, active: existing.active !== false, noApproval: !!existing.noApproval });
           clean.history = past;
         }
         var before = {}; PERSON_FIELDS.forEach(function (f) { before[f] = existing[f]; });
@@ -275,7 +280,7 @@
    */
   function recheckClashes(ctx, actor) {
     var Clash = (typeof require !== 'undefined') ? require('../rules/clash.js') : root.GJClash;
-    var today = H.today(ctx), out = [];
+    var today = H.today(ctx), out = [], again = [];
     ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Approved' && r.route !== 'override' && r.route !== 'system' && r.dates.some(function (d) { return d >= today; }); })
       .sort(function (a, b) { return (b.decidedAt || 0) - (a.decidedAt || 0); })
       .forEach(function (r) {
@@ -284,18 +289,21 @@
         var clash = Clash.checkRequest({ person: person.name, dates: r.dates.filter(function (d) { return d >= today; }), extremeEmergency: r.extremeEmergency }, H.peopleMap(ctx), H.approvedAway(ctx, r.id), H.rules(ctx));
         if (clash.ok) return;
         // Days of this leave that are already over were taken as approved leave and stay so: only the days from today on are given back.
-        var taken = r.dates.filter(function (d) { return d < today; });
+        var taken = r.dates.filter(function (d) { return d < today; }), was = r.dates.slice(), back = was.filter(function (d) { return d >= today; });
         if (taken.length) ctx.db.update('LeaveRequests', r.id, { dates: taken, run: taken.length, restrictionViolation: !!r.restrictionViolation && Leave.checkRestrictions(person.name, person, taken, H.restrictions(ctx)).violations > 0,
           history: H.hist(r.history, [{ at: ctx.now, by: actor.id, action: 'shortened – clash (rule changed)', from: { dates: r.dates } }]) });
         else ctx.db.update('LeaveRequests', r.id, { status: 'Rejected – clash', decisionReason: clash.blocks[0].message, decidedAt: ctx.now, decidedBy: 'system',
           history: H.hist(r.history, [{ at: ctx.now, by: actor.id, action: 'rejected – clash (rule changed)' }]) });
         H.syncLeaveViolations(ctx, r.personId);
-        H.notify(ctx, r.personId, 'clash', 'Leave: Rejected – clash', H.niceDates(r.dates.filter(function (d) { return d >= today; })) + ' \u2014 a clash rule was changed. ' + clash.blocks[0].message, r.id);
+        again.push([r.personId, was]);
+        H.notify(ctx, r.personId, 'clash', 'Leave: Rejected – clash', H.niceDates(back) + ' \u2014 a clash rule was changed. ' + clash.blocks[0].message, r.id);
         H.byRole(ctx, 'manager').concat(H.byRole(ctx, 'owner')).forEach(function (m) { H.notify(ctx, m.id, 'clash', 'Rejected – clash', person.name + ': ' + clash.blocks[0].message, r.id); });
         var holders = {}; clash.blocks.forEach(function (b) { (b.who || []).forEach(function (w) { holders[w] = 1; }); });
-        Object.keys(holders).forEach(function (name) { var h = H.peopleMap(ctx)[name]; if (h) H.notify(ctx, h.id, 'clash', 'A clashing leave was rejected', person.name + ' had ' + H.niceDates(r.dates) + '. Your approved time off keeps the slot.', r.id); });
+        Object.keys(holders).forEach(function (name) { var h = H.peopleMap(ctx)[name]; if (h) H.notify(ctx, h.id, 'clash', 'A clashing leave was rejected', person.name + ' had ' + H.niceDates(back) + '. Your approved time off keeps the slot.', r.id); });
         out.push(r.id);
       });
+    // Days given back are counted again only now: minutes booked here must not decide the next leave in this same check.
+    again.forEach(function (x) { x[1].forEach(function (d) { if (H.hooks.recountDay) H.hooks.recountDay(ctx, x[0], d); }); });
     return out;
   }
   function saveRule(ctx, actor, r) {
@@ -361,19 +369,27 @@
       if (key === 'startDate' && !Cal.isDate(value)) H.fail('BLOCKED', 'Pick the start date.');
       var changedDays = [];
       if (key === 'closedDays') { var was = H.closedSet(ctx); changedDays = value.filter(function (d) { return !was[d]; }).concat(Object.keys(was).filter(function (d) { return value.indexOf(d) === -1; })); }
-      if (key === 'graceTable' && !(Array.isArray(value) && value.length <= 40 && value.every(function (g) {
-        return g && typeof g === 'object' && typeof g.item === 'string' && g.item.trim() && typeof g.key === 'string' && /^[a-z0-9-]{1,40}$/.test(g.key) &&
-          typeof g.grace === 'number' && g.grace >= 0 && g.grace <= 31 && (g.per === 'month' || g.per === 'quarter' || g.per === 'week');
-      }))) H.fail('BLOCKED', 'The grace table is not valid.');
+      if (key === 'graceTable') {
+        if (!(Array.isArray(value) && value.length && value.length <= 40 && value.every(function (g) {
+          return g && typeof g === 'object' && typeof g.item === 'string' && g.item.trim() && typeof g.key === 'string' && /^[a-z0-9-]{1,40}$/.test(g.key) && (g.per === 'month' || g.per === 'quarter');
+        }))) H.fail('BLOCKED', 'The grace table is not valid.');
+        if (!value.every(function (g) { return typeof g.grace === 'number' && g.grace >= 0 && g.grace <= 31 && Math.floor(g.grace) === g.grace; })) H.fail('BLOCKED', 'Grace must be a whole number from 0 to 31.');
+      }
       putSetting(ctx, actor, key, value);
       // Closed days are never written into the rows: everything is counted again from the rows as they
       // are, with the closed days left out. So a closed day entered by mistake can simply be removed again.
-      if (key === 'closedDays') ctx.db.rows('People').forEach(function (p) {
-        if (p.role !== 'staff') return;
-        H.syncLeaveViolations(ctx, p.id);
-        var months = {}; changedDays.forEach(function (d) { months[Cal.monthKey(d)] = 1; });
-        Object.keys(months).forEach(function (m) { if (H.hooks.syncViolations) H.hooks.syncViolations(ctx, p.id, m); });
-      });
+      if (key === 'closedDays') {
+        ctx.db.rows('People').forEach(function (p) {
+          if (p.role !== 'staff') return;
+          changedDays.forEach(function (d) { if (H.hooks.recountDay) H.hooks.recountDay(ctx, p.id, d); });
+          H.syncLeaveViolations(ctx, p.id);
+          var months = {}; changedDays.forEach(function (d) { months[Cal.monthKey(d)] = 1; });
+          Object.keys(months).forEach(function (m) { if (H.hooks.syncViolations) H.hooks.syncViolations(ctx, p.id, m); });
+        });
+        // A day that is a working day again and is already over: its absent check runs now (the nightly job only looks 3 days back).
+        var start = setting(ctx, 'startDate');
+        changedDays.forEach(function (d) { if (value.indexOf(d) === -1 && d < H.today(ctx) && (!start || d >= start) && H.hooks.endOfDay) H.hooks.endOfDay(ctx, d); });
+      }
       return { ok: true };
     });
   }

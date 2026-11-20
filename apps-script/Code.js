@@ -945,29 +945,44 @@
           var at = r.__row;
           if (grid.readRow && kc !== -1) {
             var now = grid.readRow(tab, at);
+            r.__was = now;
             if (!now || String(decode(tab, key, now[kc])) !== String(r[key])) {
               unsure[tab] = true;
               fresh = fresh || (grid.readLive ? grid.readLive(tab) : grid.read(tab));
               at = -1;
               for (var i = 1; i < fresh.length; i++) if (String(decode(tab, key, fresh[i][kc])) === String(r[key])) { at = i; break; }
               if (at === -1) throw new Error('A row of "' + tab + '" is no longer on the Sheet.');
+              r.__was = fresh[at];
             }
           }
           // Only the app's own columns are written; whatever else the owner keeps in that row is not touched.
           var cells = [];
           live[tab].forEach(function (h, c) { if (has(Schema.TABS[tab], h) && Object.prototype.hasOwnProperty.call(r, h)) cells[c] = encode(tab, h, r[h]); });
-          places.push({ tab: tab, at: at, cells: cells, row: r });
+          // What the Sheet holds in these cells now: put back if a later step of this write fails.
+          var was = null;
+          if (r.__was) { was = []; cells.forEach(function (v, c) { was[c] = r.__was[c] === undefined ? '' : r.__was[c]; }); }
+          delete r.__was;
+          places.push({ tab: tab, at: at, cells: cells, row: r, was: was });
         });
       });
-      // Changed rows first, new rows (alerts, audit) last: if the Sheet fails in between, nobody is told about a change that was not saved.
-      places.forEach(function (p) { grid.writeRow(p.tab, p.at, p.cells); p.row.__row = p.at; });
-      if (batch.length) {
-        if (grid.appendMany) firstRows = grid.appendMany(batch) || {};
-        else batch.forEach(function (b) {
-          if (grid.appendRows) firstRows[b.tab] = grid.appendRows(b.tab, b.rows);
-          else { firstRows[b.tab] = null; b.rows.forEach(function (a) { grid.append(b.tab, a); }); }
-        });
+      // One request is saved whole or not at all, as far as the Sheet allows: changed rows first, new rows
+      // (alerts, audit, violations) last; if any step fails, the rows already changed are put back as they were.
+      var done = [];
+      try {
+        places.forEach(function (p) { grid.writeRow(p.tab, p.at, p.cells); done.push(p); });
+        if (batch.length) {
+          if (grid.appendMany) firstRows = grid.appendMany(batch) || {};
+          else batch.forEach(function (b) {
+            if (grid.appendRows) firstRows[b.tab] = grid.appendRows(b.tab, b.rows);
+            else { firstRows[b.tab] = null; b.rows.forEach(function (a) { grid.append(b.tab, a); }); }
+          });
+        }
+      } catch (e) {
+        done.forEach(function (p) { if (p.was) { try { grid.writeRow(p.tab, p.at, p.was); } catch (x) { /* the Sheet is down: nothing more can be done here */ } } });
+        cache = {}; if (grid.reset) grid.reset();
+        throw e;
       }
+      places.forEach(function (p) { p.row.__row = p.at; });
       Object.keys(cache).forEach(function (tab) {
         var t = cache[tab];
         var changed = t.pending.length || t.dirty.length;
@@ -1118,7 +1133,7 @@
   /** Shop-closed days (Settings). A leave on a closed day uses no quota. */
   function closedSet(ctx) {
     var out = {};
-    try { (JSON.parse(settingValue(ctx, 'closedDays') || '[]') || []).forEach(function (d) { out[d] = true; }); } catch (e) { /* bad setting = no closed days */ }
+    try { var list = JSON.parse(settingValue(ctx, 'closedDays') || '[]'); if (Array.isArray(list)) list.forEach(function (d) { if (typeof d === 'string') out[d] = true; }); } catch (e) { /* bad setting = no closed days */ }
     return out;
   }
   /** Days on which the total away time is over 2 hours: a half day, or a full day over 4 h 30 min. */
@@ -1215,10 +1230,23 @@
     // A phone that was rejected or removed may ask again (a new request, a new token); it never comes back by itself.
     if (known && (known.status === 'approved' || known.status === 'pending')) return { ok: known.status === 'approved', deviceStatus: known.status, deviceId: known.id };
     var label = String(deviceLabel || '').slice(0, 120);
+    var everyPhone = ctx.db.rows('Devices');
+    if (p.role === 'owner' && everyPhone.length === 1 && everyPhone[0].personId === personId && everyPhone[0].status === 'approved' && everyPhone[0].decidedBy === 'bootstrap' &&
+      everyPhone[0].label === label && ctx.now - everyPhone[0].requestedAt < 15 * 60000) {
+      var retry = ctx.env.randomId() + ctx.env.randomId();
+      ctx.db.update('Devices', everyPhone[0].id, { tokenHash: ctx.env.sha256(retry) });
+      audit(ctx, personId, 'device.first-sign-in-repeated', everyPhone[0].id);
+      return { ok: true, deviceStatus: 'approved', deviceId: everyPhone[0].id, deviceToken: retry };
+    }
     var same = ctx.db.rows('Devices').filter(function (d) { return d.personId === personId && d.status === 'pending' && d.label === label; })[0];
     if (same) {
       var again = ctx.env.randomId() + ctx.env.randomId();
-      ctx.db.update('Devices', same.id, { tokenHash: ctx.env.sha256(again), requestedAt: ctx.now });
+      // Kept as one request, but never silently: the card says it was asked again, the approvers are told, Audit has a row.
+      ctx.db.update('Devices', same.id, { tokenHash: ctx.env.sha256(again), decidedAt: ctx.now, decidedBy: 'asked-again' });
+      audit(ctx, personId, 'device.asked-again', same.id, { label: label });
+      (p.role === 'owner' ? byRole(ctx, 'manager') : byRole(ctx, 'owner')).forEach(function (o) {
+        notify(ctx, o.id, 'device', 'Phone request repeated: ' + p.name, 'The sign-in was repeated; the request now belongs to the phone that asked last. Approve only after ' + p.name + ' confirms it is the phone in hand.', same.id);
+      });
       return { ok: false, deviceStatus: 'pending', deviceId: same.id, deviceToken: again };
     }
     var waiting = ctx.db.rows('Devices').filter(function (d) { return d.personId === personId && d.status === 'pending'; }).length;
@@ -1457,7 +1485,7 @@
 
   function addViolation(ctx, personId, date, rule, ref) {
     var who = find(ctx, 'People', personId);
-    if (who && who.noApproval) return; // records only (intern): never a violation
+    if (who && Cal.asOn(who, date).noApproval) return; // records only (intern) on that day: never a violation
     ctx.db.insert('Violations', { id: ctx.env.randomId(), personId: personId, date: date, rule: rule, source: 'auto', proof: ref,
       note: '', createdBy: 'system', createdAt: stamp(ctx), disputeState: '', disputeAt: '', disputeText: '', disputeDecidedBy: '', disputeDecidedAt: '' });
     byRole(ctx, 'owner').concat(byRole(ctx, 'manager')).forEach(function (m) { notify(ctx, m.id, 'violation', 'Violation recorded', (who ? who.name + ': ' : '') + ruleLabel(rule), ref); });
@@ -1482,6 +1510,24 @@
       });
   }
 
+  function plainNote(note) { return String(note || '').replace(/( \| )?(No longer applies|Applies again|Recalculated after a correction|Applies again after a correction)/g, ''); }
+  function removedByVarun(v) { return v.disputeState === 'removed' && /Dispute removed:/.test(v.note || ''); }
+  /** A violation that no longer applies is marked removed (never deleted); the person and the owner are told. */
+  function withdrawRow(ctx, v, why) {
+    var note = plainNote(v.note);
+    ctx.db.update('Violations', v.id, { disputeState: 'removed', note: (note ? note + ' | ' : '') + 'No longer applies' });
+    toldWithdrawn(ctx, v, why);
+  }
+  /** It applies again: back as it was (upheld stays upheld, a dispute that was waiting waits again). Never when Varun removed it. */
+  function reviveRow(ctx, v) {
+    if (removedByVarun(v)) return false;
+    var note = plainNote(v.note);
+    var state = /Dispute upheld:/.test(note) ? 'upheld' : (v.disputeText && !v.disputeDecidedBy ? 'open' : '');
+    ctx.db.update('Violations', v.id, { disputeState: state, note: (note ? note + ' | ' : '') + 'Applies again' });
+    notify(ctx, v.personId, 'violation', 'Violation applies again', ruleLabel(v.rule) + ' (' + niceDates([v.date]) + '). The change that had withdrawn it was undone.', v.id);
+    return true;
+  }
+  var MAX_REQUESTS_PER_DAY = 6;
   var LEAVE_RULES = { 'unannounced-leave': 1, 'emergency-beyond-2': 1, 'leave-in-restricted-period': 1, 'absent-no-request': 1 };
   /**
    * Keeps the violations that come from leave rows (unannounced, 3rd emergency, restricted period,
@@ -1503,10 +1549,10 @@
     ctx.db.rows('LeaveRequests').forEach(function (r) {
       if (r.personId !== personId) return;
       if (OPEN[r.status]) { waiting[r.id] = 1; return; }
-      if (who.noApproval || who.role !== 'staff' && r.route === 'system') return;
+      if (who.role !== 'staff' && r.route === 'system') return;
       // Dated on the first day of the leave that is in an open month and not a closed day. No such day: nothing to record.
       var on = firstOpen(r.dates);
-      if (!on) return;
+      if (!on || Cal.asOn(who, on).noApproval) return;
       if (r.status === ABSENT) { wanted[r.id + '|absent-no-request'] = on; return; }
       if (!GRANTED[r.status] || r.route === 'system' || r.route === 'override') return;
       if (r.type === 'Unannounced') wanted[r.id + '|unannounced-leave'] = on;
@@ -1514,8 +1560,7 @@
       if (r.restrictionViolation) wanted[r.id + '|leave-in-restricted-period'] = on;
     });
     var byKey = {};
-    var byVarun = function (v) { return v.disputeState === 'removed' && /Dispute removed:/.test(v.note || ''); };
-    var plain = function (note) { return String(note || '').replace(/( \| )?(No longer applies|Applies again)/g, ''); };
+    var byVarun = removedByVarun;
     ctx.db.rows('Violations').forEach(function (v) {
       if (v.personId !== personId || !LEAVE_RULES[v.rule]) return;
       var key = v.proof + '|' + v.rule;
@@ -1535,12 +1580,10 @@
         delete wanted[key];
         if (live.length) return;
         if (list.some(byVarun)) return; // removed by Varun after a dispute: never again
-        var back = list[0], note = plain(back.note);
-        ctx.db.update('Violations', back.id, { disputeState: /Dispute upheld:/.test(note) ? 'upheld' : '', note: (note ? note + ' | ' : '') + 'Applies again' });
-        notify(ctx, personId, 'violation', 'Violation applies again', ruleLabel(back.rule) + ' (' + niceDates([back.date]) + '). The change that had withdrawn it was undone.', back.id);
+        reviveRow(ctx, list[0]);
         return;
       }
-      live.forEach(function (v) { var note = plain(v.note); ctx.db.update('Violations', v.id, { disputeState: 'removed', note: (note ? note + ' | ' : '') + 'No longer applies' }); toldWithdrawn(ctx, v, 'It no longer applies'); });
+      live.forEach(function (v) { withdrawRow(ctx, v, 'It no longer applies'); });
     });
     Object.keys(wanted).sort().forEach(function (key) {
       var p = key.split('|'), m = Cal.monthKey(wanted[key]);
@@ -1623,6 +1666,10 @@
       if (personId !== actor.id && actor.role === 'staff') fail('FORBIDDEN', 'You can apply only for yourself.');
       var person = find(ctx, 'People', personId);
       if (!person) fail('NOT_FOUND', 'No such person.');
+      // Nobody needs more than a few requests in one day; without a limit one phone could fill Aakash's alerts and the day's e-mails.
+      var day0 = toMs(today(ctx), '00:00');
+      if (actor.role === 'staff' && ctx.db.rows('LeaveRequests').filter(function (x) { return x.personId === personId && x.route !== 'system' && x.submittedAt >= day0; }).length >= MAX_REQUESTS_PER_DAY)
+        fail('BLOCKED', 'You have sent ' + MAX_REQUESTS_PER_DAY + ' requests today. Ask Aakash to enter it for you.');
       var opts = null, called = '';
       if (personId !== actor.id && input.calledAt !== undefined && input.calledAt !== '') {
         // "Called – emergency": Aakash records a phone call. Notice runs from the time of the call.
@@ -1758,7 +1805,7 @@
       if (actor.id !== r.personId && !isBoss) fail('FORBIDDEN', 'You can cancel only your own request.');
       if (started && !isBoss) fail('FORBIDDEN', 'This leave has started. Ask Aakash or Varun.');
       if (isBoss && actor.id !== r.personId && !String(reason || '').trim()) fail('REASON', 'A reason is required.');
-      var month = Cal.monthKey(r.dates[0]);
+      var month = Cal.monthKey(r.dates[0]), allDates = r.dates.slice();
       // Days that stay as leave: past days on which the person was really away, and today too when duty
       // has begun and the person has not come in (cancelling "the rest" at noon does not make today an absence).
       var now = today(ctx);
@@ -1779,7 +1826,7 @@
         // The leave has started: the days already taken stay as leave; only the days from today on are given back.
         ctx.db.update('LeaveRequests', id, { dates: gone, run: gone.length, restrictionViolation: !!r.restrictionViolation && Leave.checkRestrictions(person.name, person, gone, restrictions(ctx)).violations > 0, history: addHistory(r.history, [{ at: ctx.now, by: actor.id, action: 'shortened', from: { dates: r.dates }, reason: reason || '' }]) });
         syncLeaveViolations(ctx, r.personId);
-        r.dates.forEach(function (d) { if (gone.indexOf(d) === -1 && hooks.recountDay) hooks.recountDay(ctx, r.personId, d); });
+        allDates.forEach(function (d) { if (hooks.recountDay) hooks.recountDay(ctx, r.personId, d); });
         audit(ctx, actor.id, 'leave.shorten', id, { reason: reason || '', dates: gone });
         if (actor.id !== r.personId) notify(ctx, r.personId, 'decision', 'Leave shortened', niceDates(gone) + ' stays as leave \u2014 ' + reason, id);
         return { id: id, status: r.status, dates: gone };
@@ -1787,7 +1834,7 @@
       ctx.db.update('LeaveRequests', id, { status: 'Cancelled', history: addHistory(r.history, [{ at: ctx.now, by: actor.id, action: 'cancelled', reason: reason || '' }]) });
       syncLeaveViolations(ctx, r.personId);
       // The person may have come in on a day of this leave: that day's late / early minutes count now.
-      r.dates.forEach(function (d) { if (hooks.recountDay) hooks.recountDay(ctx, r.personId, d); });
+      allDates.forEach(function (d) { if (hooks.recountDay) hooks.recountDay(ctx, r.personId, d); });
       audit(ctx, actor.id, 'leave.cancel', id, { reason: reason || '' });
       if (actor.id !== r.personId) notify(ctx, r.personId, 'decision', 'Leave cancelled', niceDates(r.dates) + ' — ' + reason, id);
       return { id: id, status: 'Cancelled' };
@@ -1796,7 +1843,7 @@
 
   var api = { REASONS: REASONS, setPin: setPin, login: login, decideDevice: decideDevice, authenticate: authenticate,
     signOut: signOut, previewLeave: previewLeave, submitLeave: submitLeave, decideLeave: decideLeave, cancelLeave: cancelLeave, toMs: toMs,
-    _: { restrictions: restrictions, rules: rules, syncLeaveViolations: syncLeaveViolations, hist: addHistory, MAX_EDITS: MAX_EDITS, toldWithdrawn: toldWithdrawn, addDays: Cal.addDays, deciders: deciders, isEmergency: isEmergency, renumberEmergencies: renumberEmergencies, niceDates: niceDates, hooks: hooks, lockedMonths: lockedMonths, assertOpen: assertOpen, stamp: stamp, fail: fail, failKeep: failKeep, closedSet: closedSet, autoDays: autoDays, markAbsent: markAbsent, hasCheckIn: hasCheckIn, dayOver: dayOver,
+    _: { withdrawRow: withdrawRow, reviveRow: reviveRow, removedByVarun: removedByVarun, restrictions: restrictions, rules: rules, syncLeaveViolations: syncLeaveViolations, hist: addHistory, MAX_EDITS: MAX_EDITS, toldWithdrawn: toldWithdrawn, addDays: Cal.addDays, deciders: deciders, isEmergency: isEmergency, renumberEmergencies: renumberEmergencies, niceDates: niceDates, hooks: hooks, lockedMonths: lockedMonths, assertOpen: assertOpen, stamp: stamp, fail: fail, failKeep: failKeep, closedSet: closedSet, autoDays: autoDays, markAbsent: markAbsent, hasCheckIn: hasCheckIn, dayOver: dayOver,
       withdrawViolations: withdrawViolations, GRANTED: GRANTED, ABSENT: ABSENT, HALF_DAY_MINUTES: HALF_DAY_MINUTES, settingValue: settingValue, hhmmToMin: hhmmToMin, find: find, audit: audit, notify: notify, byRole: byRole, today: today, peopleMap: peopleMap, rules: rules,
       approvedAway: approvedAway, liveLeaves: liveLeaves, IST_OFFSET_MS: IST_OFFSET_MS,
       evaluate: evaluate, onGranted: onGranted, ruleLabel: ruleLabel, STATUS_FOR: STATUS_FOR, OPEN: OPEN } };
@@ -1859,12 +1906,22 @@
     var p = H.find(ctx, 'People', personId);
     return !!p && !expectedDay(ctx, p, date).fullLeave && !Cal.isRosterOff(p, date) && !H.closedSet(ctx)[date];
   }
-  /** Was a leave for this day granted and then cancelled or shortened? Then the absence was known beforehand ("informed"). */
+  /**
+   * Was a leave for this day taken back ON that day by Aakash or Varun (cancelled, shortened, moved, a rule change)?
+   * Then the absence was expected until that day, and coming in late counts as "informed". A leave the person
+   * cancelled, or one taken back on an earlier day, makes it an ordinary working day.
+   */
   function hadLeave(ctx, personId, date) {
+    var dayOf = function (ms) { return new Date(ms + H.IST_OFFSET_MS).toISOString().slice(0, 10); };
     return ctx.db.rows('LeaveRequests').some(function (r) {
-      if (r.personId !== personId || r.route === 'system' || !r.decidedAt) return false;
-      if (r.status === 'Cancelled' && r.dates.indexOf(date) !== -1) return true;
-      return H.GRANTED[r.status] && (r.history || []).some(function (h) { return /^shortened/.test(h.action || '') && h.from && (h.from.dates || []).indexOf(date) !== -1; });
+      if (r.personId !== personId || r.route === 'system') return false;
+      return (r.history || []).some(function (h) {
+        if (!h || h.by === personId || dayOf(h.at) !== date) return false;
+        if (h.action === 'cancelled') return r.dates.indexOf(date) !== -1 && !!r.decidedAt;
+        if (/^shortened/.test(h.action || '')) return !!h.from && (h.from.dates || []).indexOf(date) !== -1;
+        if (h.action === 'edited') return !!h.from && /^(Approved|Recorded)$/.test(h.from.status || '') && h.from.first <= date && date <= h.from.last && r.dates.indexOf(date) === -1;
+        return false;
+      });
     });
   }
   function punchesToday(ctx, personId, date, kind) {
@@ -2266,6 +2323,7 @@
         H.audit(ctx, actor.id, 'out.correct', id, { from: o.backAt, to: corrected });
       }
       ctx.db.update('Outings', id, patch);
+      recountDay(ctx, o.personId, o.date);
       if (correctedTime) syncViolations(ctx, o.personId, Cal.monthKey(o.date));
       H.audit(ctx, actor.id, 'out.confirm', id);
       return { id: id, status: 'Confirmed', minutes: patch.minutes === undefined ? o.minutes : patch.minutes };
@@ -2291,30 +2349,33 @@
    */
   function recountDay(ctx, personId, date) {
     if (H.lockedMonths(ctx)[Cal.monthKey(date)]) return; // a locked month is never counted again
-    var all = ctx.db.rows('DayMinutes').filter(function (m) { return m.personId === personId && m.date === date; });
-    var rows = all.filter(function (m) { return (m.kind === 'late' || m.kind === 'early') && m.minutes > 0; });
     var person = H.find(ctx, 'People', personId);
     if (!person || !punchesToday(ctx, personId, date, 'in').length) return;
+    var all = ctx.db.rows('DayMinutes').filter(function (m) { return m.personId === personId && m.date === date; });
     var day = expectedDay(ctx, person, date), counts = dayCounts(ctx, personId, date);
     var at = function (kind) { var p = punchesToday(ctx, personId, date, kind)[0]; if (!p) return null; var d = new Date(p.at + H.IST_OFFSET_MS); return d.getUTCHours() * 60 + d.getUTCMinutes(); };
     var cin = at('in'), cout = at('out');
     var left = { late: !counts || cin === null ? 0 : Math.min(uncovered(day.start, cin, day.win), uncovered(day.start, day.end, day.win)), early: !counts || cout === null ? 0 : uncovered(cout, day.end, day.win) };
     if (left.late <= Minutes.DEFAULTS.lateGraceMinutes) left.late = 0;
-    var touched = false, SET_ASIDE = 'Counted again after the leave for this day was granted';
-    rows.forEach(function (m) {
-      var now = Math.min(m.minutes, left[m.kind]); left[m.kind] -= now;
-      if (now !== m.minutes) { ctx.db.update('DayMinutes', m.id, { minutes: now, note: SET_ASIDE }); touched = true; }
-    });
+    var touched = false;
+    // A row keeps what it was booked as ("[was N]" in its note) while a leave covers the time, so that it comes back exactly
+    // as it was (informed or not, in the same pieces) when the leave is taken away again.
+    var was = function (m) { var x = /\[was (\d+)\]/.exec(m.note || ''); return x ? +x[1] : (m.minutes > 0 ? m.minutes : 0); };
+    var bare = function (m) { return String(m.note || '').replace(/ ?\[was \d+\]/, '').replace(/^(Not counted: a leave covers this time|Counted again after the leave for this day was granted)$/, ''); };
     ['late', 'early'].forEach(function (kind) {
-      if (!(left[kind] > 0)) return;
-      // Minutes that were set aside when a leave was granted for the day come back as they were (informed or not).
-      var aside = all.filter(function (m) { return m.kind === kind && !(m.minutes > 0) && m.note === SET_ASIDE; })[0];
-      if (aside) { ctx.db.update('DayMinutes', aside.id, { minutes: left[kind], note: 'Counted again after the leave for this day was cancelled' }); touched = true; return; }
-      // Time that was never booked because a leave covered the day at the tap: booked now. The absence was known, so it is "informed".
-      if (!rows.some(function (m) { return m.kind === kind; })) {
-        var p = punchesToday(ctx, personId, date, kind === 'late' ? 'in' : 'out')[0];
-        var made = addDayMinutes(ctx, personId, date, kind, left[kind], true, undefined, p ? p.id : '');
-        ctx.db.update('DayMinutes', made.id, { note: 'Counted after the leave for this day was cancelled' });
+      var mine = all.filter(function (m) { return m.kind === kind; });
+      mine.forEach(function (m) {
+        var orig = was(m), now = Math.min(orig, left[kind]); left[kind] -= now;
+        if (now === m.minutes) return;
+        ctx.db.update('DayMinutes', m.id, { minutes: now, note: now === orig ? bare(m) : (bare(m) || 'Not counted: a leave covers this time') + ' [was ' + orig + ']' });
+        touched = true;
+      });
+      // Time that was never booked because a leave (or a closed day entered by mistake) covered the day at the tap: booked now.
+      if (left[kind] > 0 && !mine.length) {
+        var p = punchesToday(ctx, personId, date, kind === 'late' ? 'in' : 'out')[0], q = activeShort(ctx, personId, date, kind);
+        var told = hadLeave(ctx, personId, date) || (!!q && q.status === 'Approved' && (kind === 'early' || q.submittedAt < Core.toMs(date, minToHhmm(day.start))));
+        var made = addDayMinutes(ctx, personId, date, kind, left[kind], told, undefined, p ? p.id : '');
+        ctx.db.update('DayMinutes', made.id, { note: 'Counted after the day became a working day again' });
         touched = true;
       }
     });
@@ -2323,11 +2384,12 @@
       if (o.personId !== personId || o.date !== date || !(o.status === 'Back' || o.status === 'Confirmed') || !(o.minutes > 0)) return;
       var row = all.filter(function (m) { return m.kind === 'out' && m.source === o.id; })[0], want = counts ? o.minutes : 0;
       if (row && row.minutes !== want) { ctx.db.update('DayMinutes', row.id, { minutes: want, note: want ? 'Counted again: a working day' : 'Not counted: leave day' }); touched = true; }
-      else if (!row && want > 0) { var add = addDayMinutes(ctx, personId, date, 'out', want, true, undefined, o.id); ctx.db.update('DayMinutes', add.id, { note: 'Counted after the leave for this day was cancelled' }); touched = true; }
+      else if (!row && want > 0) { var add = addDayMinutes(ctx, personId, date, 'out', want, true, undefined, o.id); ctx.db.update('DayMinutes', add.id, { note: 'Counted after the day became a working day again' }); touched = true; }
     });
     if (touched) syncViolations(ctx, personId, Cal.monthKey(date));
   }
   H.hooks.recountDay = recountDay;
+  H.hooks.endOfDay = function (ctx, date) { return endOfDay(ctx, date); };
   H.hooks.syncViolations = function (ctx, personId, monthKey) { return syncViolations(ctx, personId, monthKey); };
 
   // ---------- Month calculation ----------
@@ -2364,13 +2426,13 @@
   /** Keep the Violations tab in step with the minute rules. Never deletes: a dropped one is marked removed. */
   function syncViolations(ctx, personId, monthKey) {
     var who = H.find(ctx, 'People', personId);
-    if (who && who.noApproval) return; // records only (intern): never a violation
     if (H.lockedMonths(ctx)[monthKey]) return; // a locked month is never counted again
     var mm = monthMinutes(ctx, personId, monthKey);
     var wanted = {}, perEvent = {};
     mm.run.violations.forEach(function (v) {
       var src = mm.events[v.eventIndex];
       var k = (perEvent[src.id + v.rule] = (perEvent[src.id + v.rule] || 0) + 1);
+      if (who && Cal.asOn(who, src.date).noApproval) return; // "records only" on that day: never a violation
       wanted['dm:' + src.id + ':' + v.rule + ':' + k] = { rule: v.rule, date: src.date };
     });
     // A day that became a half/full day is outside the bank, but "not informed and more than
@@ -2381,7 +2443,7 @@
       // The part nobody was told about: everything when not informed; when informed, the minutes after the stated time.
       var stated = m.statedMinutes === '' || m.statedMinutes === undefined || m.statedMinutes === null ? null : m.statedMinutes;
       var silent = !m.informed ? m.minutes : (stated === null ? 0 : Math.max(0, m.minutes - stated));
-      if (silent > Minutes.DEFAULTS.notInformedMaxMinutes) {
+      if (silent > Minutes.DEFAULTS.notInformedMaxMinutes && !(who && Cal.asOn(who, m.date).noApproval)) {
         wanted['dm:' + m.id + ':not-informed-over-30:1'] = { rule: 'not-informed-over-30', date: m.date };
       }
     });
@@ -2390,10 +2452,10 @@
     });
     existing.forEach(function (v) {
       if (wanted[v.proof]) {
-        if (v.disputeState === 'removed' && /^Recalculated/.test(v.note || '')) { ctx.db.update('Violations', v.id, { disputeState: '', note: 'Applies again after a correction' }); H.notify(ctx, personId, 'violation', 'Violation applies again', H.ruleLabel(v.rule) + ' (' + H.niceDates([v.date]) + '). The change that had withdrawn it was undone.', v.id); }
+        if (v.disputeState === 'removed') H.reviveRow(ctx, v); // never when Varun removed it
         delete wanted[v.proof]; return;
       }
-      if (v.disputeState !== 'removed') { ctx.db.update('Violations', v.id, { disputeState: 'removed', note: 'Recalculated after a correction' }); H.toldWithdrawn(ctx, v, 'Counted again after a correction or a later approval'); }
+      if (v.disputeState !== 'removed') H.withdrawRow(ctx, v, 'Counted again after a correction or a later approval');
     });
     Object.keys(wanted).forEach(function (proof) {
       ctx.db.insert('Violations', { id: ctx.env.randomId(), personId: personId, date: wanted[proof].date, rule: wanted[proof].rule, source: 'auto',
@@ -2517,8 +2579,7 @@
   /** Run after closing time. Creates "Absent - unannounced" + 1 violation for staff with no request and no check-in. */
   function endOfDay(ctx, date) {
     return ctx.env.withLock(function () {
-      var closed = []; try { closed = JSON.parse(setting(ctx, 'closedDays') || '[]'); } catch (e) { closed = []; }
-      if (closed.indexOf(date) !== -1) return [];
+      if (H.closedSet(ctx)[date]) return [];
       if (H.lockedMonths(ctx)[Cal.monthKey(date)]) return [];
       var made = [];
       ctx.db.rows('People').forEach(function (p) {
@@ -2734,10 +2795,12 @@
         penaltyEmergency: ev.penaltyEmergency, restrictionViolation: ev.restrictionViolation, decidedAt: '', decidedBy: '', decisionReason: '',
         history: H.hist(r.history, [{ at: ctx.now, by: actor.id, action: 'edited', from: { first: r.dates[0], last: r.dates[r.dates.length - 1], days: r.dates.length, kind: r.kind, status: r.status } }]) };
       if (ev.decision === 'auto' || ev.decision === 'recorded') { patch.decidedAt = ctx.now; patch.decidedBy = 'system'; }
+      var oldDates = r.dates.slice();
       ctx.db.update('LeaveRequests', id, patch);
       // The violations of the old version stand until the new version is decided (granted now, or by Aakash later).
       if (patch.status === 'Approved' || patch.status === 'Recorded') H.onGranted(ctx, Object.assign({}, r, patch));
       else H.syncLeaveViolations(ctx, r.personId);
+      oldDates.concat(ev.dates).forEach(function (d) { if (H.hooks.recountDay) H.hooks.recountDay(ctx, r.personId, d); });
       if (ev.decision === 'aakash' || ev.decision === 'special') H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'approval', 'Leave request edited', person.name + ': ' + H.niceDates(ev.dates), id); });
       if (ev.decision === 'varun' || ev.decision === 'special') H.byRole(ctx, 'owner').forEach(function (o) { H.notify(ctx, o.id, 'approval', 'Leave request edited', person.name + ': ' + H.niceDates(ev.dates), id); });
       H.audit(ctx, actor.id, 'leave.edit', id, { status: patch.status });
@@ -2769,6 +2832,9 @@
         decidedBy: actor.id, decisionReason: 'Override by Varun: ' + String(input.overrideReason).trim(), history: [{ at: ctx.now, by: actor.id, action: 'override' }],
         override: String(input.overrideReason).trim() };
       ctx.db.insert('LeaveRequests', row);
+      // The person may already have come in on one of these days: nothing is counted on a full-leave day.
+      H.syncLeaveViolations(ctx, person.id);
+      dates.forEach(function (d) { if (H.hooks.recountDay) H.hooks.recountDay(ctx, person.id, d); });
       H.audit(ctx, actor.id, 'leave.override', row.id, { reason: row.override, dates: dates });
       H.notify(ctx, person.id, 'decision', 'Leave: Approved', H.niceDates(dates), row.id);
       H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'override', 'Override by Varun', person.name + ': ' + H.niceDates(dates), row.id); });
@@ -2815,10 +2881,10 @@
         if (existing.name !== clean.name) renameEverywhere(ctx, actor, existing.name, clean.name);
         // The roster and the active state as they were until yesterday are kept, so days already gone are
         // never judged again by what Settings say from today on.
-        var changed = JSON.stringify(existing.sundayOff) !== JSON.stringify(clean.sundayOff) || (existing.active !== false) !== (clean.active !== false);
+        var changed = JSON.stringify(existing.sundayOff) !== JSON.stringify(clean.sundayOff) || (existing.active !== false) !== (clean.active !== false) || !!existing.noApproval !== !!clean.noApproval;
         if (changed) {
           var past = Array.isArray(existing.history) ? existing.history.slice() : [], until = Cal.addDays(H.today(ctx), -1);
-          if (!past.length || past[past.length - 1].until < until) past.push({ until: until, sundayOff: existing.sundayOff, active: existing.active !== false });
+          if (!past.length || past[past.length - 1].until < until) past.push({ until: until, sundayOff: existing.sundayOff, active: existing.active !== false, noApproval: !!existing.noApproval });
           clean.history = past;
         }
         var before = {}; PERSON_FIELDS.forEach(function (f) { before[f] = existing[f]; });
@@ -2856,7 +2922,7 @@
    */
   function recheckClashes(ctx, actor) {
     var Clash = (typeof require !== 'undefined') ? require('../rules/clash.js') : root.GJClash;
-    var today = H.today(ctx), out = [];
+    var today = H.today(ctx), out = [], again = [];
     ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Approved' && r.route !== 'override' && r.route !== 'system' && r.dates.some(function (d) { return d >= today; }); })
       .sort(function (a, b) { return (b.decidedAt || 0) - (a.decidedAt || 0); })
       .forEach(function (r) {
@@ -2865,18 +2931,21 @@
         var clash = Clash.checkRequest({ person: person.name, dates: r.dates.filter(function (d) { return d >= today; }), extremeEmergency: r.extremeEmergency }, H.peopleMap(ctx), H.approvedAway(ctx, r.id), H.rules(ctx));
         if (clash.ok) return;
         // Days of this leave that are already over were taken as approved leave and stay so: only the days from today on are given back.
-        var taken = r.dates.filter(function (d) { return d < today; });
+        var taken = r.dates.filter(function (d) { return d < today; }), was = r.dates.slice(), back = was.filter(function (d) { return d >= today; });
         if (taken.length) ctx.db.update('LeaveRequests', r.id, { dates: taken, run: taken.length, restrictionViolation: !!r.restrictionViolation && Leave.checkRestrictions(person.name, person, taken, H.restrictions(ctx)).violations > 0,
           history: H.hist(r.history, [{ at: ctx.now, by: actor.id, action: 'shortened – clash (rule changed)', from: { dates: r.dates } }]) });
         else ctx.db.update('LeaveRequests', r.id, { status: 'Rejected – clash', decisionReason: clash.blocks[0].message, decidedAt: ctx.now, decidedBy: 'system',
           history: H.hist(r.history, [{ at: ctx.now, by: actor.id, action: 'rejected – clash (rule changed)' }]) });
         H.syncLeaveViolations(ctx, r.personId);
-        H.notify(ctx, r.personId, 'clash', 'Leave: Rejected – clash', H.niceDates(r.dates.filter(function (d) { return d >= today; })) + ' \u2014 a clash rule was changed. ' + clash.blocks[0].message, r.id);
+        again.push([r.personId, was]);
+        H.notify(ctx, r.personId, 'clash', 'Leave: Rejected – clash', H.niceDates(back) + ' \u2014 a clash rule was changed. ' + clash.blocks[0].message, r.id);
         H.byRole(ctx, 'manager').concat(H.byRole(ctx, 'owner')).forEach(function (m) { H.notify(ctx, m.id, 'clash', 'Rejected – clash', person.name + ': ' + clash.blocks[0].message, r.id); });
         var holders = {}; clash.blocks.forEach(function (b) { (b.who || []).forEach(function (w) { holders[w] = 1; }); });
-        Object.keys(holders).forEach(function (name) { var h = H.peopleMap(ctx)[name]; if (h) H.notify(ctx, h.id, 'clash', 'A clashing leave was rejected', person.name + ' had ' + H.niceDates(r.dates) + '. Your approved time off keeps the slot.', r.id); });
+        Object.keys(holders).forEach(function (name) { var h = H.peopleMap(ctx)[name]; if (h) H.notify(ctx, h.id, 'clash', 'A clashing leave was rejected', person.name + ' had ' + H.niceDates(back) + '. Your approved time off keeps the slot.', r.id); });
         out.push(r.id);
       });
+    // Days given back are counted again only now: minutes booked here must not decide the next leave in this same check.
+    again.forEach(function (x) { x[1].forEach(function (d) { if (H.hooks.recountDay) H.hooks.recountDay(ctx, x[0], d); }); });
     return out;
   }
   function saveRule(ctx, actor, r) {
@@ -2942,19 +3011,27 @@
       if (key === 'startDate' && !Cal.isDate(value)) H.fail('BLOCKED', 'Pick the start date.');
       var changedDays = [];
       if (key === 'closedDays') { var was = H.closedSet(ctx); changedDays = value.filter(function (d) { return !was[d]; }).concat(Object.keys(was).filter(function (d) { return value.indexOf(d) === -1; })); }
-      if (key === 'graceTable' && !(Array.isArray(value) && value.length <= 40 && value.every(function (g) {
-        return g && typeof g === 'object' && typeof g.item === 'string' && g.item.trim() && typeof g.key === 'string' && /^[a-z0-9-]{1,40}$/.test(g.key) &&
-          typeof g.grace === 'number' && g.grace >= 0 && g.grace <= 31 && (g.per === 'month' || g.per === 'quarter' || g.per === 'week');
-      }))) H.fail('BLOCKED', 'The grace table is not valid.');
+      if (key === 'graceTable') {
+        if (!(Array.isArray(value) && value.length && value.length <= 40 && value.every(function (g) {
+          return g && typeof g === 'object' && typeof g.item === 'string' && g.item.trim() && typeof g.key === 'string' && /^[a-z0-9-]{1,40}$/.test(g.key) && (g.per === 'month' || g.per === 'quarter');
+        }))) H.fail('BLOCKED', 'The grace table is not valid.');
+        if (!value.every(function (g) { return typeof g.grace === 'number' && g.grace >= 0 && g.grace <= 31 && Math.floor(g.grace) === g.grace; })) H.fail('BLOCKED', 'Grace must be a whole number from 0 to 31.');
+      }
       putSetting(ctx, actor, key, value);
       // Closed days are never written into the rows: everything is counted again from the rows as they
       // are, with the closed days left out. So a closed day entered by mistake can simply be removed again.
-      if (key === 'closedDays') ctx.db.rows('People').forEach(function (p) {
-        if (p.role !== 'staff') return;
-        H.syncLeaveViolations(ctx, p.id);
-        var months = {}; changedDays.forEach(function (d) { months[Cal.monthKey(d)] = 1; });
-        Object.keys(months).forEach(function (m) { if (H.hooks.syncViolations) H.hooks.syncViolations(ctx, p.id, m); });
-      });
+      if (key === 'closedDays') {
+        ctx.db.rows('People').forEach(function (p) {
+          if (p.role !== 'staff') return;
+          changedDays.forEach(function (d) { if (H.hooks.recountDay) H.hooks.recountDay(ctx, p.id, d); });
+          H.syncLeaveViolations(ctx, p.id);
+          var months = {}; changedDays.forEach(function (d) { months[Cal.monthKey(d)] = 1; });
+          Object.keys(months).forEach(function (m) { if (H.hooks.syncViolations) H.hooks.syncViolations(ctx, p.id, m); });
+        });
+        // A day that is a working day again and is already over: its absent check runs now (the nightly job only looks 3 days back).
+        var start = setting(ctx, 'startDate');
+        changedDays.forEach(function (d) { if (value.indexOf(d) === -1 && d < H.today(ctx) && (!start || d >= start) && H.hooks.endOfDay) H.hooks.endOfDay(ctx, d); });
+      }
       return { ok: true };
     });
   }
@@ -3056,7 +3133,7 @@
         var present = rule.members.filter(function (m) { return !awayMap[m]; }).length;
         if (present <= rule.minPresent) risk.push(rule.label);
       });
-      var restr = ctx.db.rows('Restrictions').filter(function (r) { return r.on !== false && d >= r.from && d <= r.to; }).map(function (r) { return { note: r.note, rule: r.rule }; });
+      var restr = H.restrictions(ctx).filter(function (r) { return r.on !== false && d >= r.from && d <= r.to; }).map(function (r) { return { note: r.note, rule: r.rule }; });
       days.push({ date: d, sunday: Cal.nthSunday(d), entries: entries, risk: risk, restrictions: restr });
     }
     return { month: monthKey, days: days };
@@ -3065,7 +3142,7 @@
   /** Restrictions that apply to the caller, shown on the apply form before dates are picked. */
   function myRestrictions(ctx, actor) {
     var me = H.find(ctx, 'People', actor.id), today = H.today(ctx);
-    return ctx.db.rows('Restrictions').filter(function (r) {
+    return H.restrictions(ctx).filter(function (r) {
       if (r.on === false || r.to < today) return false;
       return r.appliesTo ? r.appliesTo.indexOf(me.name) !== -1 : !me.noClash;
     }).map(function (r) { return { from: r.from, to: r.to, note: r.note, rule: r.rule }; });
@@ -3130,13 +3207,16 @@
       // Handoff 3.11: Aakash AND Varun lock the month. The first one confirms; the lock happens when the other one confirms too.
       var acks = ctx.db.rows('MonthSheet').filter(function (r) { return r.month === monthKey && r.personId === 'lock-ack'; });
       var otherRole = actor.role === 'owner' ? 'manager' : 'owner', others = H.byRole(ctx, otherRole);
-      if (acks.some(function (a) { return a.lockedBy === actor.id; })) H.fail('BLOCKED', 'You have already confirmed. Waiting for ' + others.map(function (o) { return o.name; }).join(' / ') + '.');
+      if (others.length && acks.some(function (a) { return a.lockedBy === actor.id; })) H.fail('BLOCKED', 'You have already confirmed. Waiting for ' + others.map(function (o) { return o.name; }).join(' / ') + '.');
       if (others.length && !acks.length) {
         ctx.db.insert('MonthSheet', { id: ctx.env.randomId(), month: monthKey, personId: 'lock-ack', result: { by: actor.name, at: ctx.now }, lockedBy: actor.id, lockedAt: ctx.now });
         H.audit(ctx, actor.id, 'month.lock-confirm', monthKey);
         others.forEach(function (o) { H.notify(ctx, o.id, 'month', 'Month report ready to lock: ' + monthKey, actor.name + ' has confirmed it. Check the report and lock it.', monthKey); });
         return { month: monthKey, locked: false, waitingFor: others.map(function (o) { return o.name; }) };
       }
+      // The absent check of the last days of the month may not have run yet (a missed night job): it runs now, before anything is locked.
+      var first = H.settingValue(ctx, 'startDate'), lastDay = monthKey + '-' + Cal.daysInMonth(monthKey);
+      for (var back = 6; back >= 0; back--) { var dd = Cal.addDays(lastDay, -back); if (Cal.monthKey(dd) === monthKey && dd < H.today(ctx) && (!first || dd >= first)) Att.endOfDay(ctx, dd); }
       var people = staffForMonth(ctx, monthKey), results = people.map(function (p) { return Att.myMonth(ctx, p.id, monthKey); });
       // A request of this month that nobody decided is closed with the month (its days are in the locked
       // result as "counted, not decided"); it must not wait, and remind Aakash, for ever.
@@ -3220,7 +3300,8 @@
     if (ctx.db.reset) ctx.db.reset(); // start from what the Sheet holds now
     var people = {}; ctx.db.rows('People').forEach(function (p) { people[p.id] = p; });
     var groups = {};
-    ctx.db.rows('Notifications').forEach(function (n) { if (!n.emailedAt) (groups[n.to] = groups[n.to] || []).push(n); });
+    var triesOf = function (n) { return n.emailedAt <= -11 ? -10 - n.emailedAt : 0; };
+    ctx.db.rows('Notifications').forEach(function (n) { if (!n.emailedAt || n.emailedAt <= -11) (groups[n.to] = groups[n.to] || []).push(n); });
     // Each alert is e-mailed at most once. The alerts of this run are first marked as taken, under the
     // server lock and on fresh rows; only then are the e-mails sent. A second run that overlaps this one,
     // or the next run after a failure, finds them taken and does not send them again.
@@ -3239,7 +3320,7 @@
       left -= 1;
       var subject = list.length === 1 ? 'GJ Leave: ' + list[0].title : 'GJ Leave: ' + list.length + ' updates';
       var body = list.map(function (n) { return '\u2022 ' + n.title + (n.body ? '\n  ' + String(n.body).slice(0, 500) : ''); }).join('\n\n') + '\n\nOpen the app to act on these.';
-      jobs.push({ email: email, subject: subject, body: body.slice(0, 20000), ids: list.map(function (n) { return n.id; }) });
+      jobs.push({ email: email, subject: subject, body: body.slice(0, 20000), ids: list.map(function (n) { return n.id; }), tries: list.map(triesOf) });
       list.forEach(function (n) { marks.push([n.id, ctx.now]); });
     });
     if (marks.length) mark(marks);
@@ -3249,7 +3330,7 @@
       catch (e) {
         // Only an address that was refused is given up (-2 = in-app only). Anything else (Gmail busy, a passing fault) is tried again on the next run.
         var refused = /invalid email|invalid recipient|address/i.test(String(e && e.message || e)) && !/too many times|timed out|try again/i.test(String(e && e.message || e));
-        j.ids.forEach(function (id) { failed.push([id, refused ? -2 : '']); });
+        j.ids.forEach(function (id, i) { var n = j.tries[i] + 1; failed.push([id, refused || n >= 5 ? -2 : -10 - n]); });
       }
     });
     if (failed.length) mark(failed);
@@ -3533,7 +3614,12 @@
       var ownerIds = {}; ctx.db.rows('People').forEach(function (p) { if (p.role === 'owner') ownerIds[p.id] = 1; });
       // The manager sees only the owner's own new phone (he approves it when the owner has lost his phone).
       if (actor.role !== 'staff') out.devices = ctx.db.rows('Devices').filter(function (d) { return d.status === 'pending' && (actor.role === 'owner' || ownerIds[d.personId]); })
-        .map(function (d) { return { id: d.id, name: names[d.personId], label: d.label, requestedAt: d.requestedAt }; });
+        .map(function (d) {
+          var card = { id: d.id, name: names[d.personId], label: d.label, requestedAt: d.requestedAt };
+          if (d.decidedBy === 'asked-again') card.askedAgainAt = d.decidedAt; // the sign-in was repeated: the request belongs to the phone that asked last
+          if (actor.role !== 'owner') card.ownerRecovery = true;              // the manager may approve it, nothing else
+          return card;
+        });
       return out;
     },
     // management
@@ -3591,7 +3677,8 @@
   var READ_ONLY = { me: 1, previewLeave: 1, myLeaves: 1, pending: 1, effect: 1, photo: 1, myMonth: 1, today: 1, approvals: 1, incidentItems: 1,
     disputes: 1, staffLeaves: 1, getSettings: 1, restrictions: 1, board: 1, todayAtGJ: 1, calendar: 1, myRestrictions: 1, monthReport: 1, devices: 1, notifications: 1 };
   var JPEG = /^data:image\/jpeg;base64,[A-Za-z0-9+\/]+=*$/;
-  var TEXT_ARGS = ['reason', 'note', 'text', 'reasonText', 'overrideReason', 'label', 'deviceLabel'];
+  var TEXT_ARGS = ['reason', 'note', 'text', 'reasonText', 'overrideReason', 'label', 'deviceLabel', 'reasonCode', 'email', 'phone', 'halfStart', 'photoId', 'name', 'group',
+    'dutyStart', 'dutyEnd', 'time', 'date', 'month', 'item', 'from', 'to', 'correctedTime', 'calledAt', 'joinedOn', 'kind', 'forPersonId', 'personId', 'id', 'key'];
   var TEXT_MAX = 2000, LIST_MAX = 400, TOTAL_MAX = 12000; // one request, without its photo, is never bigger than this
 
   /** Slow work that must not hold the lock: the photo upload. Runs after sign-in is checked, before the lock. */
@@ -3907,7 +3994,14 @@ function resetOwnerPhones() {
   for (var i = 1; i < people.length; i++) if (people[i][prole] === 'owner') owners[people[i][pid]] = 1;
   var rows = dev.getDataRange().getDisplayValues(), cp = rows[0].indexOf('personId'), cs = rows[0].indexOf('status'), n = 0;
   for (var r = 1; r < rows.length; r++) if (owners[rows[r][cp]] && (rows[r][cs] === 'approved' || rows[r][cs] === 'pending')) { dev.getRange(r + 1, cs + 1).setNumberFormat('@').setValue('revoked'); n += 1; }
+  // Wrong PINs typed on the owner's name (by anyone) must not keep the owner out after this reset.
+  var ps = ss.getSheetByName('People');
+  ['pinTries', 'pinLockedUntil', 'pinLockLevel'].forEach(function (f) {
+    var c = people[0].indexOf(f); if (c === -1) return;
+    for (var k = 1; k < people.length; k++) if (people[k][prole] === 'owner') ps.getRange(k + 1, c + 1).setNumberFormat('@').setValue('0');
+  });
   CacheService.getScriptCache().put('v:Devices', Utilities.getUuid().slice(0, 8), 21600);
+  CacheService.getScriptCache().put('v:People', Utilities.getUuid().slice(0, 8), 21600);
   return n + ' owner phone(s) removed. Sign in with the owner PIN now.';
 }
 function gjReadPhoto_(id) {

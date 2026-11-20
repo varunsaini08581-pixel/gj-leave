@@ -282,7 +282,8 @@ test('R11-8 leave granted and then cancelled for a day with a not-informed late 
 test('R11-9a a person switched to "no approval needed" in December: the violation of locked November is not touched', () => {
   const w = world('2026-11-25');
   w.present('2026-11-25', ['raunak']); w.job('2026-11-25', '21:00', 'endOfDay');                             // absent with no request: 1 violation
-  ['2026-11-26', '2026-11-27', '2026-11-28', '2026-11-30'].forEach(d => w.present(d));
+  // 29 Nov added after round 13: the month lock now runs the absent check of the last days itself (R13-7), and 29 Nov (5th Sunday) is a working day.
+  ['2026-11-26', '2026-11-27', '2026-11-28', '2026-11-29', '2026-11-30'].forEach(d => w.present(d));
   lockNovember(w, '2026-12-01');
   const person = w.ok(w.call('2026-12-02', '10:00', 'getSettings', 'varun')).people.filter(p => p.id === 'raunak')[0];
   w.ok(w.call('2026-12-02', '10:01', 'savePerson', 'varun', Object.assign({}, person, { noApproval: true })));

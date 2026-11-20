@@ -224,7 +224,14 @@ function resetOwnerPhones() {
   for (var i = 1; i < people.length; i++) if (people[i][prole] === 'owner') owners[people[i][pid]] = 1;
   var rows = dev.getDataRange().getDisplayValues(), cp = rows[0].indexOf('personId'), cs = rows[0].indexOf('status'), n = 0;
   for (var r = 1; r < rows.length; r++) if (owners[rows[r][cp]] && (rows[r][cs] === 'approved' || rows[r][cs] === 'pending')) { dev.getRange(r + 1, cs + 1).setNumberFormat('@').setValue('revoked'); n += 1; }
+  // Wrong PINs typed on the owner's name (by anyone) must not keep the owner out after this reset.
+  var ps = ss.getSheetByName('People');
+  ['pinTries', 'pinLockedUntil', 'pinLockLevel'].forEach(function (f) {
+    var c = people[0].indexOf(f); if (c === -1) return;
+    for (var k = 1; k < people.length; k++) if (people[k][prole] === 'owner') ps.getRange(k + 1, c + 1).setNumberFormat('@').setValue('0');
+  });
   CacheService.getScriptCache().put('v:Devices', Utilities.getUuid().slice(0, 8), 21600);
+  CacheService.getScriptCache().put('v:People', Utilities.getUuid().slice(0, 8), 21600);
   return n + ' owner phone(s) removed. Sign in with the owner PIN now.';
 }
 function gjReadPhoto_(id) {

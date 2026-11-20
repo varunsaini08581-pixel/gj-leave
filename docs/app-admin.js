@@ -368,7 +368,7 @@
   V.grace = function () {
     run(api('getSettings')).then(function (s) {
       var rows = s.graceTable.map(function (g) {
-        var n = h('input', { type: 'number', inputmode: 'numeric', min: 0, value: g.grace, style: 'max-width:90px' });
+        var n = h('input', { type: 'number', inputmode: 'numeric', min: 0, max: 31, step: 1, value: g.grace, style: 'max-width:90px' });
         var per = h('select', { style: 'max-width:130px' }, [h('option', { value: 'month' }, 'per month'), h('option', { value: 'quarter' }, 'per quarter')]); per.value = g.per;
         return { g: g, n: n, per: per, el: h('li', {}, [h('strong', {}, g.item), h('div', { class: 'row', style: 'margin-top:6px' }, [n, per])]) };
       });

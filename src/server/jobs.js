@@ -30,7 +30,8 @@
     if (ctx.db.reset) ctx.db.reset(); // start from what the Sheet holds now
     var people = {}; ctx.db.rows('People').forEach(function (p) { people[p.id] = p; });
     var groups = {};
-    ctx.db.rows('Notifications').forEach(function (n) { if (!n.emailedAt) (groups[n.to] = groups[n.to] || []).push(n); });
+    var triesOf = function (n) { return n.emailedAt <= -11 ? -10 - n.emailedAt : 0; };
+    ctx.db.rows('Notifications').forEach(function (n) { if (!n.emailedAt || n.emailedAt <= -11) (groups[n.to] = groups[n.to] || []).push(n); });
     // Each alert is e-mailed at most once. The alerts of this run are first marked as taken, under the
     // server lock and on fresh rows; only then are the e-mails sent. A second run that overlaps this one,
     // or the next run after a failure, finds them taken and does not send them again.
@@ -49,7 +50,7 @@
       left -= 1;
       var subject = list.length === 1 ? 'GJ Leave: ' + list[0].title : 'GJ Leave: ' + list.length + ' updates';
       var body = list.map(function (n) { return '\u2022 ' + n.title + (n.body ? '\n  ' + String(n.body).slice(0, 500) : ''); }).join('\n\n') + '\n\nOpen the app to act on these.';
-      jobs.push({ email: email, subject: subject, body: body.slice(0, 20000), ids: list.map(function (n) { return n.id; }) });
+      jobs.push({ email: email, subject: subject, body: body.slice(0, 20000), ids: list.map(function (n) { return n.id; }), tries: list.map(triesOf) });
       list.forEach(function (n) { marks.push([n.id, ctx.now]); });
     });
     if (marks.length) mark(marks);
@@ -59,7 +60,7 @@
       catch (e) {
         // Only an address that was refused is given up (-2 = in-app only). Anything else (Gmail busy, a passing fault) is tried again on the next run.
         var refused = /invalid email|invalid recipient|address/i.test(String(e && e.message || e)) && !/too many times|timed out|try again/i.test(String(e && e.message || e));
-        j.ids.forEach(function (id) { failed.push([id, refused ? -2 : '']); });
+        j.ids.forEach(function (id, i) { var n = j.tries[i] + 1; failed.push([id, refused || n >= 5 ? -2 : -10 - n]); });
       }
     });
     if (failed.length) mark(failed);

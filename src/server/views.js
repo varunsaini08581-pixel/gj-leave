@@ -62,7 +62,7 @@
         var present = rule.members.filter(function (m) { return !awayMap[m]; }).length;
         if (present <= rule.minPresent) risk.push(rule.label);
       });
-      var restr = ctx.db.rows('Restrictions').filter(function (r) { return r.on !== false && d >= r.from && d <= r.to; }).map(function (r) { return { note: r.note, rule: r.rule }; });
+      var restr = H.restrictions(ctx).filter(function (r) { return r.on !== false && d >= r.from && d <= r.to; }).map(function (r) { return { note: r.note, rule: r.rule }; });
       days.push({ date: d, sunday: Cal.nthSunday(d), entries: entries, risk: risk, restrictions: restr });
     }
     return { month: monthKey, days: days };
@@ -71,7 +71,7 @@
   /** Restrictions that apply to the caller, shown on the apply form before dates are picked. */
   function myRestrictions(ctx, actor) {
     var me = H.find(ctx, 'People', actor.id), today = H.today(ctx);
-    return ctx.db.rows('Restrictions').filter(function (r) {
+    return H.restrictions(ctx).filter(function (r) {
       if (r.on === false || r.to < today) return false;
       return r.appliesTo ? r.appliesTo.indexOf(me.name) !== -1 : !me.noClash;
     }).map(function (r) { return { from: r.from, to: r.to, note: r.note, rule: r.rule }; });
@@ -136,13 +136,16 @@
       // Handoff 3.11: Aakash AND Varun lock the month. The first one confirms; the lock happens when the other one confirms too.
       var acks = ctx.db.rows('MonthSheet').filter(function (r) { return r.month === monthKey && r.personId === 'lock-ack'; });
       var otherRole = actor.role === 'owner' ? 'manager' : 'owner', others = H.byRole(ctx, otherRole);
-      if (acks.some(function (a) { return a.lockedBy === actor.id; })) H.fail('BLOCKED', 'You have already confirmed. Waiting for ' + others.map(function (o) { return o.name; }).join(' / ') + '.');
+      if (others.length && acks.some(function (a) { return a.lockedBy === actor.id; })) H.fail('BLOCKED', 'You have already confirmed. Waiting for ' + others.map(function (o) { return o.name; }).join(' / ') + '.');
       if (others.length && !acks.length) {
         ctx.db.insert('MonthSheet', { id: ctx.env.randomId(), month: monthKey, personId: 'lock-ack', result: { by: actor.name, at: ctx.now }, lockedBy: actor.id, lockedAt: ctx.now });
         H.audit(ctx, actor.id, 'month.lock-confirm', monthKey);
         others.forEach(function (o) { H.notify(ctx, o.id, 'month', 'Month report ready to lock: ' + monthKey, actor.name + ' has confirmed it. Check the report and lock it.', monthKey); });
         return { month: monthKey, locked: false, waitingFor: others.map(function (o) { return o.name; }) };
       }
+      // The absent check of the last days of the month may not have run yet (a missed night job): it runs now, before anything is locked.
+      var first = H.settingValue(ctx, 'startDate'), lastDay = monthKey + '-' + Cal.daysInMonth(monthKey);
+      for (var back = 6; back >= 0; back--) { var dd = Cal.addDays(lastDay, -back); if (Cal.monthKey(dd) === monthKey && dd < H.today(ctx) && (!first || dd >= first)) Att.endOfDay(ctx, dd); }
       var people = staffForMonth(ctx, monthKey), results = people.map(function (p) { return Att.myMonth(ctx, p.id, monthKey); });
       // A request of this month that nobody decided is closed with the month (its days are in the locked
       // result as "counted, not decided"); it must not wait, and remind Aakash, for ever.

@@ -52,12 +52,22 @@
     var p = H.find(ctx, 'People', personId);
     return !!p && !expectedDay(ctx, p, date).fullLeave && !Cal.isRosterOff(p, date) && !H.closedSet(ctx)[date];
   }
-  /** Was a leave for this day granted and then cancelled or shortened? Then the absence was known beforehand ("informed"). */
+  /**
+   * Was a leave for this day taken back ON that day by Aakash or Varun (cancelled, shortened, moved, a rule change)?
+   * Then the absence was expected until that day, and coming in late counts as "informed". A leave the person
+   * cancelled, or one taken back on an earlier day, makes it an ordinary working day.
+   */
   function hadLeave(ctx, personId, date) {
+    var dayOf = function (ms) { return new Date(ms + H.IST_OFFSET_MS).toISOString().slice(0, 10); };
     return ctx.db.rows('LeaveRequests').some(function (r) {
-      if (r.personId !== personId || r.route === 'system' || !r.decidedAt) return false;
-      if (r.status === 'Cancelled' && r.dates.indexOf(date) !== -1) return true;
-      return H.GRANTED[r.status] && (r.history || []).some(function (h) { return /^shortened/.test(h.action || '') && h.from && (h.from.dates || []).indexOf(date) !== -1; });
+      if (r.personId !== personId || r.route === 'system') return false;
+      return (r.history || []).some(function (h) {
+        if (!h || h.by === personId || dayOf(h.at) !== date) return false;
+        if (h.action === 'cancelled') return r.dates.indexOf(date) !== -1 && !!r.decidedAt;
+        if (/^shortened/.test(h.action || '')) return !!h.from && (h.from.dates || []).indexOf(date) !== -1;
+        if (h.action === 'edited') return !!h.from && /^(Approved|Recorded)$/.test(h.from.status || '') && h.from.first <= date && date <= h.from.last && r.dates.indexOf(date) === -1;
+        return false;
+      });
     });
   }
   function punchesToday(ctx, personId, date, kind) {
@@ -459,6 +469,7 @@
         H.audit(ctx, actor.id, 'out.correct', id, { from: o.backAt, to: corrected });
       }
       ctx.db.update('Outings', id, patch);
+      recountDay(ctx, o.personId, o.date);
       if (correctedTime) syncViolations(ctx, o.personId, Cal.monthKey(o.date));
       H.audit(ctx, actor.id, 'out.confirm', id);
       return { id: id, status: 'Confirmed', minutes: patch.minutes === undefined ? o.minutes : patch.minutes };
@@ -484,30 +495,33 @@
    */
   function recountDay(ctx, personId, date) {
     if (H.lockedMonths(ctx)[Cal.monthKey(date)]) return; // a locked month is never counted again
-    var all = ctx.db.rows('DayMinutes').filter(function (m) { return m.personId === personId && m.date === date; });
-    var rows = all.filter(function (m) { return (m.kind === 'late' || m.kind === 'early') && m.minutes > 0; });
     var person = H.find(ctx, 'People', personId);
     if (!person || !punchesToday(ctx, personId, date, 'in').length) return;
+    var all = ctx.db.rows('DayMinutes').filter(function (m) { return m.personId === personId && m.date === date; });
     var day = expectedDay(ctx, person, date), counts = dayCounts(ctx, personId, date);
     var at = function (kind) { var p = punchesToday(ctx, personId, date, kind)[0]; if (!p) return null; var d = new Date(p.at + H.IST_OFFSET_MS); return d.getUTCHours() * 60 + d.getUTCMinutes(); };
     var cin = at('in'), cout = at('out');
     var left = { late: !counts || cin === null ? 0 : Math.min(uncovered(day.start, cin, day.win), uncovered(day.start, day.end, day.win)), early: !counts || cout === null ? 0 : uncovered(cout, day.end, day.win) };
     if (left.late <= Minutes.DEFAULTS.lateGraceMinutes) left.late = 0;
-    var touched = false, SET_ASIDE = 'Counted again after the leave for this day was granted';
-    rows.forEach(function (m) {
-      var now = Math.min(m.minutes, left[m.kind]); left[m.kind] -= now;
-      if (now !== m.minutes) { ctx.db.update('DayMinutes', m.id, { minutes: now, note: SET_ASIDE }); touched = true; }
-    });
+    var touched = false;
+    // A row keeps what it was booked as ("[was N]" in its note) while a leave covers the time, so that it comes back exactly
+    // as it was (informed or not, in the same pieces) when the leave is taken away again.
+    var was = function (m) { var x = /\[was (\d+)\]/.exec(m.note || ''); return x ? +x[1] : (m.minutes > 0 ? m.minutes : 0); };
+    var bare = function (m) { return String(m.note || '').replace(/ ?\[was \d+\]/, '').replace(/^(Not counted: a leave covers this time|Counted again after the leave for this day was granted)$/, ''); };
     ['late', 'early'].forEach(function (kind) {
-      if (!(left[kind] > 0)) return;
-      // Minutes that were set aside when a leave was granted for the day come back as they were (informed or not).
-      var aside = all.filter(function (m) { return m.kind === kind && !(m.minutes > 0) && m.note === SET_ASIDE; })[0];
-      if (aside) { ctx.db.update('DayMinutes', aside.id, { minutes: left[kind], note: 'Counted again after the leave for this day was cancelled' }); touched = true; return; }
-      // Time that was never booked because a leave covered the day at the tap: booked now. The absence was known, so it is "informed".
-      if (!rows.some(function (m) { return m.kind === kind; })) {
-        var p = punchesToday(ctx, personId, date, kind === 'late' ? 'in' : 'out')[0];
-        var made = addDayMinutes(ctx, personId, date, kind, left[kind], true, undefined, p ? p.id : '');
-        ctx.db.update('DayMinutes', made.id, { note: 'Counted after the leave for this day was cancelled' });
+      var mine = all.filter(function (m) { return m.kind === kind; });
+      mine.forEach(function (m) {
+        var orig = was(m), now = Math.min(orig, left[kind]); left[kind] -= now;
+        if (now === m.minutes) return;
+        ctx.db.update('DayMinutes', m.id, { minutes: now, note: now === orig ? bare(m) : (bare(m) || 'Not counted: a leave covers this time') + ' [was ' + orig + ']' });
+        touched = true;
+      });
+      // Time that was never booked because a leave (or a closed day entered by mistake) covered the day at the tap: booked now.
+      if (left[kind] > 0 && !mine.length) {
+        var p = punchesToday(ctx, personId, date, kind === 'late' ? 'in' : 'out')[0], q = activeShort(ctx, personId, date, kind);
+        var told = hadLeave(ctx, personId, date) || (!!q && q.status === 'Approved' && (kind === 'early' || q.submittedAt < Core.toMs(date, minToHhmm(day.start))));
+        var made = addDayMinutes(ctx, personId, date, kind, left[kind], told, undefined, p ? p.id : '');
+        ctx.db.update('DayMinutes', made.id, { note: 'Counted after the day became a working day again' });
         touched = true;
       }
     });
@@ -516,11 +530,12 @@
       if (o.personId !== personId || o.date !== date || !(o.status === 'Back' || o.status === 'Confirmed') || !(o.minutes > 0)) return;
       var row = all.filter(function (m) { return m.kind === 'out' && m.source === o.id; })[0], want = counts ? o.minutes : 0;
       if (row && row.minutes !== want) { ctx.db.update('DayMinutes', row.id, { minutes: want, note: want ? 'Counted again: a working day' : 'Not counted: leave day' }); touched = true; }
-      else if (!row && want > 0) { var add = addDayMinutes(ctx, personId, date, 'out', want, true, undefined, o.id); ctx.db.update('DayMinutes', add.id, { note: 'Counted after the leave for this day was cancelled' }); touched = true; }
+      else if (!row && want > 0) { var add = addDayMinutes(ctx, personId, date, 'out', want, true, undefined, o.id); ctx.db.update('DayMinutes', add.id, { note: 'Counted after the day became a working day again' }); touched = true; }
     });
     if (touched) syncViolations(ctx, personId, Cal.monthKey(date));
   }
   H.hooks.recountDay = recountDay;
+  H.hooks.endOfDay = function (ctx, date) { return endOfDay(ctx, date); };
   H.hooks.syncViolations = function (ctx, personId, monthKey) { return syncViolations(ctx, personId, monthKey); };
 
   // ---------- Month calculation ----------
@@ -557,13 +572,13 @@
   /** Keep the Violations tab in step with the minute rules. Never deletes: a dropped one is marked removed. */
   function syncViolations(ctx, personId, monthKey) {
     var who = H.find(ctx, 'People', personId);
-    if (who && who.noApproval) return; // records only (intern): never a violation
     if (H.lockedMonths(ctx)[monthKey]) return; // a locked month is never counted again
     var mm = monthMinutes(ctx, personId, monthKey);
     var wanted = {}, perEvent = {};
     mm.run.violations.forEach(function (v) {
       var src = mm.events[v.eventIndex];
       var k = (perEvent[src.id + v.rule] = (perEvent[src.id + v.rule] || 0) + 1);
+      if (who && Cal.asOn(who, src.date).noApproval) return; // "records only" on that day: never a violation
       wanted['dm:' + src.id + ':' + v.rule + ':' + k] = { rule: v.rule, date: src.date };
     });
     // A day that became a half/full day is outside the bank, but "not informed and more than
@@ -574,7 +589,7 @@
       // The part nobody was told about: everything when not informed; when informed, the minutes after the stated time.
       var stated = m.statedMinutes === '' || m.statedMinutes === undefined || m.statedMinutes === null ? null : m.statedMinutes;
       var silent = !m.informed ? m.minutes : (stated === null ? 0 : Math.max(0, m.minutes - stated));
-      if (silent > Minutes.DEFAULTS.notInformedMaxMinutes) {
+      if (silent > Minutes.DEFAULTS.notInformedMaxMinutes && !(who && Cal.asOn(who, m.date).noApproval)) {
         wanted['dm:' + m.id + ':not-informed-over-30:1'] = { rule: 'not-informed-over-30', date: m.date };
       }
     });
@@ -583,10 +598,10 @@
     });
     existing.forEach(function (v) {
       if (wanted[v.proof]) {
-        if (v.disputeState === 'removed' && /^Recalculated/.test(v.note || '')) { ctx.db.update('Violations', v.id, { disputeState: '', note: 'Applies again after a correction' }); H.notify(ctx, personId, 'violation', 'Violation applies again', H.ruleLabel(v.rule) + ' (' + H.niceDates([v.date]) + '). The change that had withdrawn it was undone.', v.id); }
+        if (v.disputeState === 'removed') H.reviveRow(ctx, v); // never when Varun removed it
         delete wanted[v.proof]; return;
       }
-      if (v.disputeState !== 'removed') { ctx.db.update('Violations', v.id, { disputeState: 'removed', note: 'Recalculated after a correction' }); H.toldWithdrawn(ctx, v, 'Counted again after a correction or a later approval'); }
+      if (v.disputeState !== 'removed') H.withdrawRow(ctx, v, 'Counted again after a correction or a later approval');
     });
     Object.keys(wanted).forEach(function (proof) {
       ctx.db.insert('Violations', { id: ctx.env.randomId(), personId: personId, date: wanted[proof].date, rule: wanted[proof].rule, source: 'auto',
@@ -710,8 +725,7 @@
   /** Run after closing time. Creates "Absent - unannounced" + 1 violation for staff with no request and no check-in. */
   function endOfDay(ctx, date) {
     return ctx.env.withLock(function () {
-      var closed = []; try { closed = JSON.parse(setting(ctx, 'closedDays') || '[]'); } catch (e) { closed = []; }
-      if (closed.indexOf(date) !== -1) return [];
+      if (H.closedSet(ctx)[date]) return [];
       if (H.lockedMonths(ctx)[Cal.monthKey(date)]) return [];
       var made = [];
       ctx.db.rows('People').forEach(function (p) {

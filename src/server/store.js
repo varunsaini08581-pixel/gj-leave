@@ -204,29 +204,44 @@
           var at = r.__row;
           if (grid.readRow && kc !== -1) {
             var now = grid.readRow(tab, at);
+            r.__was = now;
             if (!now || String(decode(tab, key, now[kc])) !== String(r[key])) {
               unsure[tab] = true;
               fresh = fresh || (grid.readLive ? grid.readLive(tab) : grid.read(tab));
               at = -1;
               for (var i = 1; i < fresh.length; i++) if (String(decode(tab, key, fresh[i][kc])) === String(r[key])) { at = i; break; }
               if (at === -1) throw new Error('A row of "' + tab + '" is no longer on the Sheet.');
+              r.__was = fresh[at];
             }
           }
           // Only the app's own columns are written; whatever else the owner keeps in that row is not touched.
           var cells = [];
           live[tab].forEach(function (h, c) { if (has(Schema.TABS[tab], h) && Object.prototype.hasOwnProperty.call(r, h)) cells[c] = encode(tab, h, r[h]); });
-          places.push({ tab: tab, at: at, cells: cells, row: r });
+          // What the Sheet holds in these cells now: put back if a later step of this write fails.
+          var was = null;
+          if (r.__was) { was = []; cells.forEach(function (v, c) { was[c] = r.__was[c] === undefined ? '' : r.__was[c]; }); }
+          delete r.__was;
+          places.push({ tab: tab, at: at, cells: cells, row: r, was: was });
         });
       });
-      // Changed rows first, new rows (alerts, audit) last: if the Sheet fails in between, nobody is told about a change that was not saved.
-      places.forEach(function (p) { grid.writeRow(p.tab, p.at, p.cells); p.row.__row = p.at; });
-      if (batch.length) {
-        if (grid.appendMany) firstRows = grid.appendMany(batch) || {};
-        else batch.forEach(function (b) {
-          if (grid.appendRows) firstRows[b.tab] = grid.appendRows(b.tab, b.rows);
-          else { firstRows[b.tab] = null; b.rows.forEach(function (a) { grid.append(b.tab, a); }); }
-        });
+      // One request is saved whole or not at all, as far as the Sheet allows: changed rows first, new rows
+      // (alerts, audit, violations) last; if any step fails, the rows already changed are put back as they were.
+      var done = [];
+      try {
+        places.forEach(function (p) { grid.writeRow(p.tab, p.at, p.cells); done.push(p); });
+        if (batch.length) {
+          if (grid.appendMany) firstRows = grid.appendMany(batch) || {};
+          else batch.forEach(function (b) {
+            if (grid.appendRows) firstRows[b.tab] = grid.appendRows(b.tab, b.rows);
+            else { firstRows[b.tab] = null; b.rows.forEach(function (a) { grid.append(b.tab, a); }); }
+          });
+        }
+      } catch (e) {
+        done.forEach(function (p) { if (p.was) { try { grid.writeRow(p.tab, p.at, p.was); } catch (x) { /* the Sheet is down: nothing more can be done here */ } } });
+        cache = {}; if (grid.reset) grid.reset();
+        throw e;
       }
+      places.forEach(function (p) { p.row.__row = p.at; });
       Object.keys(cache).forEach(function (tab) {
         var t = cache[tab];
         var changed = t.pending.length || t.dirty.length;

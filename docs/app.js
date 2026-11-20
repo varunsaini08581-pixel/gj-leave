@@ -35,14 +35,32 @@
       if (!f.getAttribute('aria-label') && f.getAttribute('placeholder')) f.setAttribute('aria-label', f.getAttribute('placeholder'));
     });
   }
+  function cardKey(c) { var s = c && c.querySelector && c.querySelector('strong, h2'); return s ? s.textContent : ''; }
   function show(nodes) {
     // A redraw that comes from the automatic refresh: dropped when the person has started to fill something in
-    // meanwhile, and the page stays where it was scrolled to.
+    // meanwhile; the card in the middle of the screen stays where it is, also when a new card arrives above it.
     var auto = state.auto === state.gen + 1; state.auto = 0;
     state.loading = false;
     if (auto && typing()) return;
-    var y = auto ? (window.scrollY || 0) : 0;
-    app.replaceChildren.apply(app, [].concat(nodes).filter(function (n) { return n != null && n !== false; })); tieLabels(); window.scrollTo(0, y);
+    var y = auto ? (window.scrollY || 0) : 0, anchor = null;
+    if (auto && state.tab === 'approve' && document.elementFromPoint) { // Approvals: cards arrive and leave; Today keeps its plain scroll position
+      var el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2), card = el && el.closest ? el.closest('.card') : null;
+      if (card && cardKey(card)) anchor = { key: cardKey(card), top: card.getBoundingClientRect().top };
+    }
+    // The page keeps its height while parts of the new screen are still loading (the board on Today), so it cannot jump to the top.
+    app.style.minHeight = auto ? app.offsetHeight + 'px' : '';
+    app.replaceChildren.apply(app, [].concat(nodes).filter(function (n) { return n != null && n !== false; })); tieLabels();
+    if (anchor) {
+      var best = null;
+      [].slice.call(app.querySelectorAll('.card')).forEach(function (c) {
+        if (cardKey(c) !== anchor.key) return;
+        var d = Math.abs(c.getBoundingClientRect().top - anchor.top);
+        if (!best || d < best.d) best = { c: c, d: d };
+      });
+      if (best) y += best.c.getBoundingClientRect().top - anchor.top;
+    }
+    window.scrollTo(0, y);
+    if (auto) setTimeout(function () { app.style.minHeight = ''; }, 4000);
   }
   /** A screen that could not load: say so, and offer to try again (never an endless "Loading"). */
   function showLoadError(message) {
@@ -144,7 +162,8 @@
     });
   }
   function run(promise, okText) {
-    return promise.then(function (d) { if (okText) toast(okText); return d; }, function (e) { if (e.code !== 'AUTH') toast(e.message, true); throw e; });
+    var gen = state.gen;
+    return promise.then(function (d) { if (okText) toast(okText); return gen === state.gen ? d : NEVER; }, function (e) { if (e.code !== 'AUTH') toast(e.message, true); throw e; });
   }
   function busy(btn, fn) {
     return function () {
@@ -232,6 +251,7 @@
 
   // ---------- today ----------
   VIEWS.home = function () {
+    var wasAuto = state.auto === state.gen + 1;
     Promise.all([api('today'), api('notifications'), state.me.role !== 'staff' ? api('approvals') : null]).then(function (r) {
       var t = r[0], notes = r[1].slice(-5).reverse(), ap = r[2];
       if (ap) { state.badge = ap.leaves.length + ap.outings.length + ap.devices.length + ap.absences.length + ap.shorts.length + (ap.dress || []).length; drawTabs(); }
@@ -286,7 +306,11 @@
         return h('li', {}, [h('strong', {}, n.title), n.body ? h('div', { class: 'muted' }, n.body) : null, h('div', { class: 'muted' }, whenOf(n.createdAt))]);
       }))]));
       show(cards);
-    }).catch(function (e) { if (e.code !== 'AUTH') show(h('div', { class: 'warn' }, e.message)); });
+    }).catch(function (e) {
+      if (e.code === 'AUTH') return;
+      if (wasAuto) { state.auto = 0; state.loading = false; return; } // the screen stays as it is; the next refresh tries again
+      showLoadError(e.message);
+    });
   };
   function position() {
     return new Promise(function (resolve) {
@@ -536,8 +560,10 @@
       });
       a.devices.forEach(function (d) {
         cards.push(h('div', { class: 'card' }, [h('div', { class: 'row' }, [h('strong', {}, d.name + ' · New phone'), h('span', { class: 'chip amber' }, 'Pending')]), h('p', { class: 'muted' }, d.label),
+          d.ownerRecovery ? h('p', { class: 'muted' }, 'The owner is signing in on a new phone and cannot approve it himself. Approve only after he confirms it to you in person or by a call. His old phone stops working.') : null,
+          d.askedAgainAt ? h('div', { class: 'warn' }, 'This sign-in was repeated at ' + new Date(d.askedAgainAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '. The request now belongs to the phone that asked last. Check with ' + d.name + ' before you approve.') : null,
           h('div', { class: 'btns' }, [button('Approve phone', 'good', function () { return run(api('decideDevice', { id: d.id, approve: true }), 'Phone approved.').then(VIEWS.approve); }),
-            button('Reject', 'danger', function () { return run(api('decideDevice', { id: d.id, approve: false }), 'Rejected.').then(VIEWS.approve); })])]));
+            d.ownerRecovery ? null : button('Reject', 'danger', function () { return run(api('decideDevice', { id: d.id, approve: false }), 'Rejected.').then(VIEWS.approve); })])]));
       });
       show(cards);
     }).catch(function () {});

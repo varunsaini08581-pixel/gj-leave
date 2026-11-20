@@ -165,7 +165,12 @@
       var ownerIds = {}; ctx.db.rows('People').forEach(function (p) { if (p.role === 'owner') ownerIds[p.id] = 1; });
       // The manager sees only the owner's own new phone (he approves it when the owner has lost his phone).
       if (actor.role !== 'staff') out.devices = ctx.db.rows('Devices').filter(function (d) { return d.status === 'pending' && (actor.role === 'owner' || ownerIds[d.personId]); })
-        .map(function (d) { return { id: d.id, name: names[d.personId], label: d.label, requestedAt: d.requestedAt }; });
+        .map(function (d) {
+          var card = { id: d.id, name: names[d.personId], label: d.label, requestedAt: d.requestedAt };
+          if (d.decidedBy === 'asked-again') card.askedAgainAt = d.decidedAt; // the sign-in was repeated: the request belongs to the phone that asked last
+          if (actor.role !== 'owner') card.ownerRecovery = true;              // the manager may approve it, nothing else
+          return card;
+        });
       return out;
     },
     // management
@@ -223,7 +228,8 @@
   var READ_ONLY = { me: 1, previewLeave: 1, myLeaves: 1, pending: 1, effect: 1, photo: 1, myMonth: 1, today: 1, approvals: 1, incidentItems: 1,
     disputes: 1, staffLeaves: 1, getSettings: 1, restrictions: 1, board: 1, todayAtGJ: 1, calendar: 1, myRestrictions: 1, monthReport: 1, devices: 1, notifications: 1 };
   var JPEG = /^data:image\/jpeg;base64,[A-Za-z0-9+\/]+=*$/;
-  var TEXT_ARGS = ['reason', 'note', 'text', 'reasonText', 'overrideReason', 'label', 'deviceLabel'];
+  var TEXT_ARGS = ['reason', 'note', 'text', 'reasonText', 'overrideReason', 'label', 'deviceLabel', 'reasonCode', 'email', 'phone', 'halfStart', 'photoId', 'name', 'group',
+    'dutyStart', 'dutyEnd', 'time', 'date', 'month', 'item', 'from', 'to', 'correctedTime', 'calledAt', 'joinedOn', 'kind', 'forPersonId', 'personId', 'id', 'key'];
   var TEXT_MAX = 2000, LIST_MAX = 400, TOTAL_MAX = 12000; // one request, without its photo, is never bigger than this
 
   /** Slow work that must not hold the lock: the photo upload. Runs after sign-in is checked, before the lock. */
