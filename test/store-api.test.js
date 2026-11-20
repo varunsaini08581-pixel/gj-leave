@@ -12,14 +12,17 @@ const { env, seed } = require('./helpers.js');
 
 // A fake Sheet: every cell is text, exactly like the real Sheet with plain-text format.
 function fakeGrid() {
-  const tabs = {};
+  const tabs = {}, calls = { read: 0, append: 0, appendRows: 0, writeRow: 0, headers: 0 };
   return {
     tabs,
     tabNames: () => Object.keys(tabs),
     addTab: name => { tabs[name] = []; },
-    read: name => (tabs[name] || []).map(r => r.slice()),
-    append: (name, row) => { tabs[name].push(row.map(String)); },
-    writeRow: (name, i, row) => { tabs[name][i] = row.map(String); },
+    read: name => { calls.read += 1; return (tabs[name] || []).map(r => r.slice()); },
+    append: (name, row) => { calls.append += 1; tabs[name].push(row.map(String)); },
+    writeRow: (name, i, row) => { calls.writeRow += 1; tabs[name][i] = row.map(String); },
+    headers: name => { calls.headers += 1; return (tabs[name] && tabs[name][0] || []).slice(); },
+    appendRows: (name, rows) => { calls.appendRows += 1; const first = tabs[name].length; rows.forEach(r => tabs[name].push(r.map(String))); return first; },
+    calls,
   };
 }
 
@@ -174,4 +177,50 @@ test('photos: Today at GJ thumbnails for everyone today; the full photo only for
   assert.equal(a.call(['2026-11-21', '10:00'], 'photo', a.vikas, { id: row.thumbId }).code, 'FORBIDDEN'); // yesterday's is no longer public
   assert.equal(a.call(a.t, 'photo', null, { id: row.thumbId }).code, 'AUTH');
   assert.equal(a.call(a.t, 'checkIn', a.vikas, { photo: 'x'.repeat(900001), thumb: 'y' }).code, 'BLOCKED');
+});
+
+test('buffered store (used on the real Sheet): same result, far fewer writes, write-only tabs are not read', () => {
+  // The same leave flow twice: immediate writes vs buffered writes with one flush per request.
+  const runFlow = buffered => {
+    const g = fakeGrid(); Store.setup(g);
+    const mem = seed(); const db0 = Store.open(g); mem.db.rows('People').forEach(p => db0.insert('People', p));
+    Object.keys(g.calls).forEach(k => { g.calls[k] = 0; });
+    const req = (when, fn) => { const db = Store.open(g, { buffer: buffered }); const out = fn({ db, env, now: mem.ist(...when) }); db.flush(); return out; };
+    const a = req(['2026-11-24', '12:00'], c => Core.submitLeave(c, mem.actor('Bhawna'), leave(['2026-11-25'])));
+    const b = req(['2026-11-24', '12:01'], c => Core.submitLeave(c, mem.actor('Pooja'), leave(['2026-11-25'])));
+    req(['2026-11-24', '12:05'], c => Core.decideLeave(c, mem.actor('Aakash'), a.id, true));
+    const last = req(['2026-11-24', '12:06'], c => Core.decideLeave(c, mem.actor('Aakash'), b.id, true));
+    const strip = t => g.tabs[t].map(r => r.map(c => /^id\d+_|^[0-9a-f]{12}$/.test(c) ? '' : c.replace(/id\d+_[0-9a-f]{12}/g, 'ID')));
+    return { status: last.status, calls: { ...g.calls }, leaves: g.tabs.LeaveRequests.length, notes: g.tabs.Notifications.length, audit: g.tabs.Audit.length, sample: strip('LeaveRequests').map(r => r.slice(1, 13)) };
+  };
+  const now = runFlow(false), buf = runFlow(true);
+  assert.equal(buf.status, 'Rejected \u2013 clash');
+  assert.deepEqual([buf.leaves, buf.notes, buf.audit], [now.leaves, now.notes, now.audit]);
+  assert.deepEqual(buf.sample, now.sample);
+  assert.equal(buf.calls.append, 0);
+  assert.ok(buf.calls.appendRows < now.calls.appendRows, JSON.stringify([buf.calls, now.calls]));
+  // Many rows for one tab in one request = one write.
+  const g = fakeGrid(); Store.setup(g); Object.keys(g.calls).forEach(k => { g.calls[k] = 0; });
+  const db = Store.open(g, { buffer: true });
+  for (let i = 0; i < 12; i++) db.insert('Notifications', { id: 'n' + i, to: 'aakash', kind: 'x', title: 't' });
+  db.insert('Audit', { id: 'a1', at: 1, actor: 'x', action: 'y' });
+  db.flush();
+  assert.deepEqual([g.calls.appendRows, g.calls.read], [2, 0]); // 2 tabs written, neither read in full
+  assert.equal(g.tabs.Notifications.length, 13);
+});
+
+test('buffered store: a row inserted and then updated in the same request is written once, correctly', () => {
+  const g = fakeGrid(); Store.setup(g);
+  const db = Store.open(g, { buffer: true });
+  db.insert('Outings', { id: 'o1', personId: 'neha', status: 'Pending', minutes: '' });
+  assert.equal(db.rows('Outings').length, 1);            // visible to the same request before it is written
+  db.update('Outings', 'o1', { status: 'Approved', minutes: 12 });
+  assert.equal(g.tabs.Outings.length, 1);                // nothing on the Sheet yet
+  db.flush(); db.flush();
+  assert.equal(g.tabs.Outings.length, 2);
+  const again = Store.open(g).rows('Outings')[0];
+  assert.deepEqual([again.status, again.minutes], ['Approved', 12]);
+  db.update('Outings', 'o1', { status: 'Back' }); db.flush();   // an update after the flush goes to the right row
+  assert.equal(Store.open(g).rows('Outings')[0].status, 'Back');
+  assert.equal(g.tabs.Outings.length, 2);
 });

@@ -23,6 +23,18 @@ function gjGrid_() {
       var r = sh.getLastRow() + 1;
       sh.getRange(r, 1, 1, row.length).setNumberFormat('@').setValues([row]);
     },
+    headers: function (name) {
+      var sh = ss.getSheetByName(name);
+      if (!sh || sh.getLastRow() === 0) return [];
+      return sh.getRange(1, 1, 1, sh.getLastColumn()).getDisplayValues()[0];
+    },
+    /** Writes many rows in one call. Returns the 0-based index of the first row written. */
+    appendRows: function (name, rows) {
+      var sh = ss.getSheetByName(name);
+      var r = sh.getLastRow() + 1;
+      sh.getRange(r, 1, rows.length, rows[0].length).setNumberFormat('@').setValues(rows);
+      return r - 1;
+    },
     writeRow: function (name, index, row) {
       var sh = ss.getSheetByName(name);
       sh.getRange(index + 1, 1, 1, row.length).setNumberFormat('@').setValues([row]);
@@ -31,6 +43,7 @@ function gjGrid_() {
 }
 
 var gjLockDepth_ = 0;
+var gjDb_ = null; // the request's db, so buffered writes are flushed before the lock is released
 
 function gjEnv_() {
   return {
@@ -46,13 +59,15 @@ function gjEnv_() {
       var lock = LockService.getScriptLock();
       lock.waitLock(25000);
       gjLockDepth_ += 1;
-      try { return fn(); } finally { gjLockDepth_ -= 1; lock.releaseLock(); }
+      try { var result = fn(); if (gjDb_) gjDb_.flush(); return result; } finally { gjLockDepth_ -= 1; lock.releaseLock(); }
     }
   };
 }
 
 function gjCtx_() {
-  return { db: GJStore.open(gjGrid_()), now: Date.now(), env: gjEnv_() }; // server time only
+  var ctx = { db: GJStore.open(gjGrid_(), { buffer: true }), now: Date.now(), env: gjEnv_() }; // server time only
+  gjDb_ = ctx.db;
+  return ctx;
 }
 
 /** Run once from the editor after pasting the code. Safe to run again. */
@@ -69,7 +84,9 @@ function setupOrUpgrade() {
 function doPost(e) {
   var request = {};
   try { request = JSON.parse(e.postData.contents); } catch (err) { request = {}; }
-  var reply = GJApi.handle(gjCtx_(), request);
+  var ctx = gjCtx_();
+  var reply = GJApi.handle(ctx, request);
+  ctx.db.flush(); // anything written outside a locked action (login, reads that log)
   return ContentService.createTextOutput(JSON.stringify(reply)).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -101,7 +118,9 @@ function gjMailer_() {
 function gjJob_(name) {
   var ctx = gjCtx_();
   ctx.env.ownerEmail = Session.getEffectiveUser().getEmail();
-  return GJJobs.run(ctx, name, gjMailer_());
+  var result = GJJobs.run(ctx, name, gjMailer_());
+  ctx.db.flush();
+  return result;
 }
 function jobEmails() { return gjJob_('emails'); }
 function jobHourly() { return gjJob_('hourly'); }

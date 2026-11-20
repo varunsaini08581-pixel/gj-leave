@@ -116,6 +116,13 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Owner allowed the new Google permission (17:25).
 - Tests: 107 pass. Both phone checks pass with 0 console errors.
 
+### 20 Nov 2026, 17:30 IST
+- Server version 2 deployed on TEST through the owner's Chrome after he allowed the extra Google permission (two tries; the first time not every box was ticked). `setupOrUpgrade` ran on the real Sheet and added the new tabs and columns without touching data (upgrade path proven on the real Sheet). `jobHourly` ran once on the real Sheet without error.
+- Real-server check of v2: owner bootstrap login, staff phone approval, check-in WITH photo saved to the private Drive folder, hints, effect preview, Today at GJ. All correct, but the check-in took 12.6 s (first photo also created the Drive folder).
+- Fix for speed: the Sheet store now buffers inserts and updates and writes each tab once per request (`flush` inside the server lock, before it is released); a tab that is only written to (Audit, usually Notifications) is no longer read in full. Buffered and immediate modes proven to give the same Sheet content.
+- Timers (`installTriggers`) are NOT installed on the TEST Sheet on purpose: with test data they would email the owner a fake absent list every night. They go on at release.
+- Tests: 109 pass.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.

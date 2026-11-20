@@ -597,40 +597,74 @@
     return done;
   }
 
-  /** Open a db over the grid. Each tab is read at most once per request and cached. */
-  function open(grid) {
+  /**
+   * Open a db over the grid. Each tab is read at most once per request and cached.
+   *
+   * options.buffer = true (used on the real Sheet): inserts and updates are collected and
+   * written together by flush() - one write per tab instead of one per row. That is the
+   * difference between a 3-second and a 12-second check-in. flush() is called inside the
+   * server lock, so nothing is visible to another request half-written.
+   * A tab that is only written to in a request (Audit, usually Notifications) is never read in full.
+   */
+  function open(grid, options) {
+    var buffer = !!(options && options.buffer);
     var cache = {};
+    function entry(tab) {
+      if (!cache[tab]) cache[tab] = { headers: null, rows: null, pending: [], dirty: [] };
+      return cache[tab];
+    }
+    function headersOf(tab) {
+      var t = entry(tab);
+      if (!t.headers) {
+        var h = grid.headers ? grid.headers(tab) : (grid.read(tab)[0] || []);
+        t.headers = h && h.length ? h.map(String) : Schema.TABS[tab].slice();
+      }
+      return t.headers;
+    }
     function load(tab) {
-      if (cache[tab]) return cache[tab];
+      var t = entry(tab);
+      if (t.rows) return t;
       var data = grid.read(tab);
-      var headers = data.length ? data[0].map(String) : Schema.TABS[tab].slice();
+      t.headers = data.length ? data[0].map(String) : Schema.TABS[tab].slice();
       var rows = [];
       for (var i = 1; i < data.length; i++) {
-        var obj = {};
-        var empty = true;
-        for (var c = 0; c < headers.length; c++) {
+        var obj = {}, empty = true;
+        for (var c = 0; c < t.headers.length; c++) {
           var cell = data[i][c];
           if (cell !== '' && cell !== undefined && cell !== null) empty = false;
-          obj[headers[c]] = decode(tab, headers[c], cell);
+          obj[t.headers[c]] = decode(tab, t.headers[c], cell);
         }
         if (empty) continue;
         Object.defineProperty(obj, '__row', { value: i, enumerable: false, writable: true });
         rows.push(obj);
       }
-      cache[tab] = { headers: headers, rows: rows, nextRow: data.length || 1 };
-      return cache[tab];
+      t.rows = rows.concat(t.pending); // rows inserted earlier in this request, before the tab was read
+      return t;
     }
     function toArray(tab, headers, obj) { return headers.map(function (h) { return encode(tab, h, obj[h]); }); }
-    return {
+    function flush() {
+      Object.keys(cache).forEach(function (tab) {
+        var t = cache[tab];
+        if (t.pending.length) {
+          var arrays = t.pending.map(function (r) { return toArray(tab, t.headers, r); });
+          var first = grid.appendRows ? grid.appendRows(tab, arrays) : null;
+          if (first === null || first === undefined) { first = null; arrays.forEach(function (a) { grid.append(tab, a); }); }
+          t.pending.forEach(function (r, i) { r.__row = first === null ? -1 : first + i; });
+          t.pending = [];
+        }
+        t.dirty.forEach(function (r) { if (r.__row > 0) grid.writeRow(tab, r.__row, toArray(tab, t.headers, r)); });
+        t.dirty = [];
+      });
+    }
+    var db = {
       rows: function (tab) { return load(tab).rows; },
       insert: function (tab, obj) {
-        var t = load(tab);
-        var row = {};
-        t.headers.forEach(function (h) { row[h] = decode(tab, h, encode(tab, h, obj[h])); });
-        grid.append(tab, toArray(tab, t.headers, obj));
-        Object.defineProperty(row, '__row', { value: t.nextRow, enumerable: false, writable: true });
-        t.nextRow += 1;
-        t.rows.push(row);
+        var headers = headersOf(tab), t = entry(tab), row = {};
+        headers.forEach(function (h) { row[h] = decode(tab, h, encode(tab, h, obj[h])); });
+        Object.defineProperty(row, '__row', { value: 0, enumerable: false, writable: true }); // 0 = not written yet
+        t.pending.push(row);
+        if (t.rows) t.rows.push(row);
+        if (!buffer) flush();
       },
       update: function (tab, key, patch) {
         var t = load(tab);
@@ -641,9 +675,12 @@
           if (!has(t.headers, k)) throw new Error('update: unknown column ' + tab + '.' + k);
           row[k] = decode(tab, k, encode(tab, k, patch[k]));
         });
-        grid.writeRow(tab, row.__row, toArray(tab, t.headers, row));
-      }
+        if (row.__row > 0 && t.dirty.indexOf(row) === -1) t.dirty.push(row); // a not-yet-written row is simply written with its new values
+        if (!buffer) flush();
+      },
+      flush: flush
     };
+    return db;
   }
 
   var api = { setup: setup, open: open, encode: encode, decode: decode };
@@ -2328,6 +2365,18 @@ function gjGrid_() {
       var r = sh.getLastRow() + 1;
       sh.getRange(r, 1, 1, row.length).setNumberFormat('@').setValues([row]);
     },
+    headers: function (name) {
+      var sh = ss.getSheetByName(name);
+      if (!sh || sh.getLastRow() === 0) return [];
+      return sh.getRange(1, 1, 1, sh.getLastColumn()).getDisplayValues()[0];
+    },
+    /** Writes many rows in one call. Returns the 0-based index of the first row written. */
+    appendRows: function (name, rows) {
+      var sh = ss.getSheetByName(name);
+      var r = sh.getLastRow() + 1;
+      sh.getRange(r, 1, rows.length, rows[0].length).setNumberFormat('@').setValues(rows);
+      return r - 1;
+    },
     writeRow: function (name, index, row) {
       var sh = ss.getSheetByName(name);
       sh.getRange(index + 1, 1, 1, row.length).setNumberFormat('@').setValues([row]);
@@ -2336,6 +2385,7 @@ function gjGrid_() {
 }
 
 var gjLockDepth_ = 0;
+var gjDb_ = null; // the request's db, so buffered writes are flushed before the lock is released
 
 function gjEnv_() {
   return {
@@ -2351,13 +2401,15 @@ function gjEnv_() {
       var lock = LockService.getScriptLock();
       lock.waitLock(25000);
       gjLockDepth_ += 1;
-      try { return fn(); } finally { gjLockDepth_ -= 1; lock.releaseLock(); }
+      try { var result = fn(); if (gjDb_) gjDb_.flush(); return result; } finally { gjLockDepth_ -= 1; lock.releaseLock(); }
     }
   };
 }
 
 function gjCtx_() {
-  return { db: GJStore.open(gjGrid_()), now: Date.now(), env: gjEnv_() }; // server time only
+  var ctx = { db: GJStore.open(gjGrid_(), { buffer: true }), now: Date.now(), env: gjEnv_() }; // server time only
+  gjDb_ = ctx.db;
+  return ctx;
 }
 
 /** Run once from the editor after pasting the code. Safe to run again. */
@@ -2374,7 +2426,9 @@ function setupOrUpgrade() {
 function doPost(e) {
   var request = {};
   try { request = JSON.parse(e.postData.contents); } catch (err) { request = {}; }
-  var reply = GJApi.handle(gjCtx_(), request);
+  var ctx = gjCtx_();
+  var reply = GJApi.handle(ctx, request);
+  ctx.db.flush(); // anything written outside a locked action (login, reads that log)
   return ContentService.createTextOutput(JSON.stringify(reply)).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -2406,7 +2460,9 @@ function gjMailer_() {
 function gjJob_(name) {
   var ctx = gjCtx_();
   ctx.env.ownerEmail = Session.getEffectiveUser().getEmail();
-  return GJJobs.run(ctx, name, gjMailer_());
+  var result = GJJobs.run(ctx, name, gjMailer_());
+  ctx.db.flush();
+  return result;
 }
 function jobEmails() { return gjJob_('emails'); }
 function jobHourly() { return gjJob_('hourly'); }
