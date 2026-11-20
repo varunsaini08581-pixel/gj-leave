@@ -13,6 +13,14 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - 20 Nov 19:27 IST (owner, voice): going out over 15 minutes is NOT free: the whole outing comes from the 2-hour bank. The 2-hourly reminder is never sent between 00:00 and 06:00. One reminder on the evening before is fine. (Taken as: an outing of 15 minutes or less stays free; to confirm.)
 - 20 Nov 23:46 IST (owner): (1) lost owner phone: Aakash may approve the owner's new phone, AND the editor reset stays (63 confirmed). (2) Coming to work on a day of approved leave: the rule of 72 is confirmed. Sunday swaps get NO separate rule: the same rules apply to every day; the owner corrects swaps by hand. (3) Requests per day: from the 4th request a person sends in one day, everyone sees a red warning and it always goes for approval (Aakash); from the 6th it goes to Varun directly; nothing is refused. (4) The free outing (15 min or less) is free ONCE a day; other short outings of that day count whole. (5) The total limits stay as given before. Go live: 21 Nov 2026.
 
+## LIVE (from 21 Nov 2026)
+- Sheet "GJ Leave": 1M72Pp0SqqNDyqO2fYLtC7tZB3BMwSQSWMW4HXxVVOCY (bound Apps Script project "GJ Leave": 1_mlQxUgi5QCis8V0ys2eK6PUoCLFYykzxTgkiR2_ZLqiNPv2vzDW17lB).
+- Web app (deployment version 1 = commit 918bf97): https://script.google.com/macros/s/AKfycbzv9zU87xUiYZUz15T_KhDgwLOXN08PU-b2U6NDyDVkK0PVgtX-CaViHAB-ae2BesDqQw/exec ; docs/config.js points here.
+- Owner clicked Allow; setupOrUpgrade run; installTriggers run (4 timers; startDate 2026-11-21).
+- People copied from TEST (names, groups, roles, duty hours, roster Sundays, flags) WITHOUT PINs and WITHOUT salary; Aakash e-mail aakashsaini49736@gmail.com (owner gave it without ".com"; taken as gmail.com).
+- Still with the owner: his own PIN (Sheet menu GJ Leave > Set owner PIN), staff PINs (app), salaries (app Settings), confirm whether anyone's duty / roster changed.
+- To update the live server: paste apps-script/Code.js into the "GJ Leave" project, save, Deploy > Manage deployments > edit > New version > Deploy (the URL stays). Run setupOrUpgrade first when the schema changed.
+
 ## Log
 ### 20 Nov 2026
 - Read the full 18-page handoff. Sent time estimate, questions, permissions, precautions and the visual plan PDF.
@@ -201,6 +209,9 @@ Round 19 (0/1/2/1, delta review of ab1f7f3) fixed: 4 reproducers pass (R19-4 hel
 
 ### 21 Nov 2026, 00:14 IST
 Round 20 (0/0/1/1, delta review of 4f73a0b) fixed: 2 reproducers pass. Rounds 19 (delta, 0/1/2/1) and 20 (delta, 0/0/1/1).
+
+### 21 Nov 2026, 00:26 IST
+LIVE: Sheet 'GJ Leave' set up, web app deployed, timers installed, staff list copied without PINs or salary. docs/config.js now points at the live server.
 
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
