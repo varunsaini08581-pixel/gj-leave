@@ -50,9 +50,9 @@
     return Math.round(2 * R * Math.asin(Math.sqrt(a)));
   }
 
-  function addDayMinutes(ctx, personId, date, kind, minutes, informed, statedMinutes, source) {
+  function addDayMinutes(ctx, personId, date, kind, minutes, informed, statedMinutes, source, shortId) {
     var row = { id: ctx.env.randomId(), personId: personId, date: date, kind: kind, minutes: minutes, informed: informed,
-      statedMinutes: statedMinutes === undefined ? '' : statedMinutes, source: source, note: '' };
+      statedMinutes: statedMinutes === undefined ? '' : statedMinutes, source: source, note: '', shortId: shortId || '' };
     ctx.db.insert('DayMinutes', row);
     return row;
   }
@@ -66,7 +66,11 @@
 
   /**
    * "I will be late" (before duty start, with the expected arrival time) or
-   * "I will leave early" (before leaving, with the time). Makes those minutes "informed".
+   * "I will leave early" (before leaving, with the time).
+   * Owner, 20 Nov 2026: the staff member can send it, but Aakash must APPROVE it.
+   * The minutes are "informed" only when it is approved. If Aakash decides after the person
+   * has already arrived or left, the day is corrected at that moment (approved = informed,
+   * rejected = not informed).
    */
   function requestShort(ctx, actor, a) {
     return ctx.env.withLock(function () {
@@ -86,21 +90,44 @@
       }
       checkClashToday(ctx, person, date);
       ctx.db.rows('ShortRequests').forEach(function (q) { // a new one replaces the old one of the same kind
-        if (q.personId === actor.id && q.date === date && q.kind === a.kind && q.status === 'Active') ctx.db.update('ShortRequests', q.id, { status: 'Replaced' });
+        if (q.personId === actor.id && q.date === date && q.kind === a.kind && (q.status === 'Pending' || q.status === 'Approved')) ctx.db.update('ShortRequests', q.id, { status: 'Replaced' });
       });
-      var row = { id: ctx.env.randomId(), personId: actor.id, date: date, kind: a.kind, time: a.time, submittedAt: ctx.now, status: 'Active', note: '' };
+      var row = { id: ctx.env.randomId(), personId: actor.id, date: date, kind: a.kind, time: a.time, submittedAt: ctx.now, status: 'Pending', note: '', decidedAt: '', decidedBy: '', decisionReason: '' };
       ctx.db.insert('ShortRequests', row);
       H.audit(ctx, actor.id, 'short.request', row.id, { kind: a.kind, time: a.time });
       H.byRole(ctx, 'manager').forEach(function (m) {
-        H.notify(ctx, m.id, 'short', person.name + (a.kind === 'late' ? ' will be late' : ' will leave early'), niceDay(date) + ', ' + a.time, row.id);
+        H.notify(ctx, m.id, 'approval', person.name + (a.kind === 'late' ? ' asks to come late' : ' asks to leave early'), niceDay(date) + ', ' + a.time, row.id);
       });
-      return { id: row.id, minutes: minutes };
+      return { id: row.id, minutes: minutes, status: 'Pending' };
+    });
+  }
+
+  /** Aakash (or Varun) approves or rejects a late / early request. */
+  function decideShort(ctx, actor, id, approve, reason) {
+    return ctx.env.withLock(function () {
+      boss(actor);
+      var q = H.find(ctx, 'ShortRequests', id);
+      if (!q || q.status !== 'Pending') H.fail('NOT_FOUND', 'This request is not waiting.');
+      if (q.personId === actor.id) H.fail('FORBIDDEN', 'Nobody approves their own request.');
+      if (!approve && !String(reason || '').trim()) H.fail('REASON', 'A reason is required to reject.');
+      if (approve) checkClashToday(ctx, H.find(ctx, 'People', q.personId), q.date, id);
+      ctx.db.update('ShortRequests', id, { status: approve ? 'Approved' : 'Rejected', decidedAt: ctx.now, decidedBy: actor.id, decisionReason: reason || '' });
+      // The person may already have arrived or left while this was pending: correct those minutes now.
+      var touched = false;
+      ctx.db.rows('DayMinutes').forEach(function (m) {
+        if (m.shortId === id && approve && !m.informed) { ctx.db.update('DayMinutes', m.id, { informed: true, note: 'Approved later by ' + actor.name }); touched = true; }
+      });
+      if (touched) syncViolations(ctx, q.personId, Cal.monthKey(q.date));
+      H.audit(ctx, actor.id, approve ? 'short.approve' : 'short.reject', id);
+      H.notify(ctx, q.personId, 'decision', (q.kind === 'late' ? 'Late arrival ' : 'Early leaving ') + (approve ? 'approved' : 'not approved'),
+        niceDay(q.date) + ', ' + q.time + (reason ? ' \u2014 ' + reason : ''), id);
+      return { id: id, status: approve ? 'Approved' : 'Rejected' };
     });
   }
   function niceDay(d) { return d.slice(8) + '-' + d.slice(5, 7); }
 
   function activeShort(ctx, personId, date, kind) {
-    return ctx.db.rows('ShortRequests').filter(function (q) { return q.personId === personId && q.date === date && q.kind === kind && q.status === 'Active'; })[0];
+    return ctx.db.rows('ShortRequests').filter(function (q) { return q.personId === personId && q.date === date && q.kind === kind && (q.status === 'Pending' || q.status === 'Approved'); })[0];
   }
 
   // ---------- Check-in / check-out ----------
@@ -128,10 +155,12 @@
       var late = nowMin(ctx) - day.start, counted = null;
       if (!day.fullLeave && !Cal.isRosterOff(person, date) && late > Minutes.DEFAULTS.lateGraceMinutes) {
         var q = activeShort(ctx, actor.id, date, 'late');
-        // "Informed" only if it was applied before duty start.
-        var informed = !!q && q.submittedAt < Core.toMs(date, minToHhmm(day.start));
-        counted = addDayMinutes(ctx, actor.id, date, 'late', late, informed, informed ? hhmmToMin(q.time) - day.start : undefined, punch.id);
-        if (q) ctx.db.update('ShortRequests', q.id, { status: 'Used' });
+        // "Informed" only if it was applied before duty start AND Aakash approved it.
+        // Still pending: counted as not informed for now, and corrected when Aakash decides.
+        var inTime = !!q && q.submittedAt < Core.toMs(date, minToHhmm(day.start));
+        var informed = inTime && q.status === 'Approved';
+        counted = addDayMinutes(ctx, actor.id, date, 'late', late, informed, inTime ? hhmmToMin(q.time) - day.start : undefined, punch.id,
+          inTime && q.status === 'Pending' ? q.id : '');
         syncViolations(ctx, actor.id, Cal.monthKey(date));
       }
       H.audit(ctx, actor.id, 'punch.in', punch.id, { late: late, flag: punch.flag });
@@ -154,12 +183,12 @@
       if (!day.fullLeave && !Cal.isRosterOff(person, date) && early > 0) {
         var q = activeShort(ctx, actor.id, date, 'early');
         var stated = q ? hhmmToMin(q.time) : null;
-        if (q && now >= stated) addDayMinutes(ctx, actor.id, date, 'early', early, true, undefined, punch.id);
+        var ok = !!q && q.status === 'Approved', wait = q && q.status === 'Pending' ? q.id : '';
+        if (q && now >= stated) addDayMinutes(ctx, actor.id, date, 'early', early, ok, undefined, punch.id, wait);
         else if (q) { // left before the stated time: the extra minutes are not informed
-          addDayMinutes(ctx, actor.id, date, 'early', day.end - stated, true, undefined, punch.id);
+          addDayMinutes(ctx, actor.id, date, 'early', day.end - stated, ok, undefined, punch.id, wait);
           addDayMinutes(ctx, actor.id, date, 'early', stated - now, false, undefined, punch.id);
         } else addDayMinutes(ctx, actor.id, date, 'early', early, false, undefined, punch.id);
-        if (q) ctx.db.update('ShortRequests', q.id, { status: 'Used' });
         syncViolations(ctx, actor.id, Cal.monthKey(date));
       }
       H.audit(ctx, actor.id, 'punch.out', punch.id, { early: Math.max(0, early) });
@@ -277,7 +306,7 @@
     var pay = ctx.db.rows('PayInfo').filter(function (p) { return p.personId === personId; })[0];
     var dutyHours = (pay && pay.dutyHours) || (hhmmToMin(person.dutyEnd) - hhmmToMin(person.dutyStart)) / 60;
     var run = Minutes.runMonth({ salary: pay ? pay.fixedSalary : 0, dutyHours: dutyHours },
-      s.events.map(function (m) { return { kind: m.kind, minutes: m.minutes, informed: m.informed, statedMinutes: m.statedMinutes === '' ? undefined : m.statedMinutes }; }));
+      s.events.map(function (m) { return { kind: m.kind, minutes: m.minutes, informed: m.informed, statedMinutes: (m.statedMinutes === '' || !m.informed) ? undefined : m.statedMinutes }; }));
     return { run: run, events: s.events, converted: s.converted, pay: pay || null, dutyHours: dutyHours };
   }
 
@@ -401,7 +430,7 @@
     });
   }
 
-  var api = { requestShort: requestShort, checkIn: checkIn, checkOut: checkOut, goingOut: goingOut, decideOuting: decideOuting,
+  var api = { requestShort: requestShort, decideShort: decideShort, checkIn: checkIn, checkOut: checkOut, goingOut: goingOut, decideOuting: decideOuting,
     imBack: imBack, confirmBack: confirmBack, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
     syncViolations: syncViolations };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

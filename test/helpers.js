@@ -10,7 +10,8 @@ function memoryDb() {
     rows: tab => data[tab],
     insert: (tab, obj) => { data[tab].push(JSON.parse(JSON.stringify(obj))); },
     update: (tab, id, patch) => {
-      const row = data[tab].find(r => r.id === id);
+      const key = TABS[tab][0]; // the first column is the key, exactly like the Sheet store
+      const row = data[tab].find(r => r[key] === id);
       if (!row) throw new Error('update: no row ' + tab + ' ' + id);
       Object.assign(row, JSON.parse(JSON.stringify(patch)));
     },

@@ -131,7 +131,7 @@
     ctx.db.rows('DayMinutes').forEach(function (m) { out.push({ person: names[m.personId], date: m.date, kind: m.kind }); });
     // Planned late/early and approved outings also make a person "away" that day.
     ctx.db.rows('ShortRequests').forEach(function (q) {
-      if (q.status === 'Active' && q.id !== exceptId) out.push({ person: names[q.personId], date: q.date, kind: q.kind });
+      if (q.status === 'Approved' && q.id !== exceptId) out.push({ person: names[q.personId], date: q.date, kind: q.kind });
     });
     ctx.db.rows('Outings').forEach(function (o) {
       if (o.id !== exceptId && (o.status === 'Approved' || o.status === 'Back' || o.status === 'Confirmed')) out.push({ person: names[o.personId], date: o.date, kind: 'out' });
@@ -168,6 +168,9 @@
     if (REASONS.indexOf(input.reasonCode) === -1) problems.push('Choose a reason.');
     if (!String(input.reasonText || '').trim()) problems.push('Write the reason.');
     if (problems.length) return { decision: 'blocked', reasons: problems, valid: false };
+
+    var lockedSet = {}; ctx.db.rows('MonthSheet').forEach(function (m) { lockedSet[m.month] = true; });
+    if (dates.some(function (d) { return lockedSet[Cal.monthKey(d)]; })) return { decision: 'blocked', reasons: ['This month is locked.'], valid: false };
 
     var others = liveLeaves(ctx, person.id, exceptId);
     var overlap = others.some(function (r) { return r.dates.some(function (d) { return dates.indexOf(d) !== -1; }); });
@@ -344,7 +347,8 @@
   var api = { REASONS: REASONS, setPin: setPin, login: login, decideDevice: decideDevice, authenticate: authenticate,
     previewLeave: previewLeave, submitLeave: submitLeave, decideLeave: decideLeave, cancelLeave: cancelLeave, toMs: toMs,
     _: { fail: fail, find: find, audit: audit, notify: notify, byRole: byRole, today: today, peopleMap: peopleMap, rules: rules,
-      approvedAway: approvedAway, liveLeaves: liveLeaves, IST_OFFSET_MS: IST_OFFSET_MS } };
+      approvedAway: approvedAway, liveLeaves: liveLeaves, IST_OFFSET_MS: IST_OFFSET_MS,
+      evaluate: evaluate, onGranted: onGranted, STATUS_FOR: STATUS_FOR, OPEN: OPEN } };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJCore = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

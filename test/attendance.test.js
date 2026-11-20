@@ -5,6 +5,7 @@ const Core = require('../src/server/core.js');
 const Att = require('../src/server/attendance.js');
 const { seed } = require('./helpers.js');
 
+const ok = (s, when, r) => Att.decideShort(s.ctx(...when), s.actor('Aakash'), r.id, true);
 const code = fn => { try { fn(); } catch (e) { return e.code + ': ' + e.message; } return 'NO_ERROR'; };
 const D = '2026-11-25'; // a Wednesday
 const leave = (dates, extra) => ({ kind: 'full', dates, reasonCode: 'Personal work', reasonText: 'Bank work', ...extra });
@@ -20,7 +21,7 @@ test('check-in within 10 min grace counts nothing; one check-in per day', () => 
 
 test('late informed before duty start: minutes after grace come from the bank', () => {
   const s = seed(); const harsh = s.actor('Harsh');
-  Att.requestShort(s.ctx(D, '09:50'), harsh, { kind: 'late', time: '11:00' });
+  ok(s, [D, '09:55'], Att.requestShort(s.ctx(D, '09:50'), harsh, { kind: 'late', time: '11:00' }));
   const r = Att.checkIn(s.ctx(D, '10:52'), harsh);
   assert.equal(r.informed, true);
   const m = Att.myMonth(s.ctx(D, '12:00'), 'harsh', '2026-11');
@@ -40,7 +41,7 @@ test('late cannot be informed after duty start; uninformed late uses a pass', ()
 
 test('informed late but arrived after the stated time: the extra is not informed', () => {
   const s = seed(); const harsh = s.actor('Harsh');
-  Att.requestShort(s.ctx(D, '09:00'), harsh, { kind: 'late', time: '11:00' }); // stated 30 min
+  ok(s, [D, '09:05'], Att.requestShort(s.ctx(D, '09:00'), harsh, { kind: 'late', time: '11:00' })); // stated 30 min
   Att.checkIn(s.ctx(D, '11:15'), harsh);                                      // actual 45 min
   const m = Att.myMonth(s.ctx(D, '12:00'), 'harsh', '2026-11');
   assert.equal(m.bank.used, 35);
@@ -58,7 +59,7 @@ test('short requests: more than 2 hours must be a half-day leave; clash is per d
   const s = seed();
   assert.match(code(() => Att.requestShort(s.ctx(D, '08:00'), s.actor('Harsh'), { kind: 'late', time: '12:45' })), /half day/);
   // Bhawna (09:30) informs late; Pooja then cannot leave early the same day (owner example).
-  Att.requestShort(s.ctx(D, '08:00'), s.actor('Bhawna'), { kind: 'late', time: '10:30' });
+  ok(s, [D, '08:05'], Att.requestShort(s.ctx(D, '08:00'), s.actor('Bhawna'), { kind: 'late', time: '10:30' }));
   assert.match(code(() => Att.requestShort(s.ctx(D, '12:00'), s.actor('Pooja'), { kind: 'early', time: '18:00' })), /Not allowed: Bhawna is off/);
   assert.equal(code(() => Att.requestShort(s.ctx(D, '12:00'), s.actor('Pooja'), { kind: 'early', time: '18:00', date: '2026-11-26' })), 'NO_ERROR');
 });
@@ -66,7 +67,7 @@ test('short requests: more than 2 hours must be a half-day leave; clash is per d
 test('early: informed before leaving; leaving before the stated time splits the minutes', () => {
   const s = seed(); const harsh = s.actor('Harsh');
   Att.checkIn(s.ctx(D, '10:30'), harsh);
-  Att.requestShort(s.ctx(D, '15:00'), harsh, { kind: 'early', time: '19:00' });
+  ok(s, [D, '15:05'], Att.requestShort(s.ctx(D, '15:00'), harsh, { kind: 'early', time: '19:00' }));
   assert.equal(Att.checkOut(s.ctx(D, '18:50'), harsh).earlyMinutes, 40);
   const rows = s.db.rows('DayMinutes').map(m => [m.minutes, m.informed]);
   assert.deepEqual(rows, [[30, true], [10, false]]);
@@ -130,7 +131,7 @@ test('month page: Karan example end to end gives Rs 126 and 1 violation (record 
   const days = ['02', '03', '04', '05', '06', '07', '09', '10', '11', '12', '13', '14'];
   days.forEach(d => {
     const date = '2026-11-' + d;
-    Att.requestShort(s.ctx(date, '09:00'), harsh, { kind: 'late', time: '11:00' });
+    ok(s, [date, '09:05'], Att.requestShort(s.ctx(date, '09:00'), harsh, { kind: 'late', time: '11:00' }));
     Att.checkIn(s.ctx(date, '11:00'), harsh);
   });
   const m = Att.myMonth(s.ctx('2026-11-14', '12:00'), 'harsh', '2026-11');
@@ -183,4 +184,40 @@ test('3 hours late and not informed: the day becomes a half day AND it is still 
   assert.equal(m.leaves.autoHalfDays[0].amount, 0.5);
   assert.equal(m.bank.used, 0);
   assert.deepEqual(m.violations.map(v => v.rule), ['not-informed-over-30']);
+});
+
+test('late request needs Aakash: pending = not informed; approved later = corrected to informed', () => {
+  const s = seed(); const harsh = s.actor('Harsh'), aakash = s.actor('Aakash');
+  const q = Att.requestShort(s.ctx(D, '09:00'), harsh, { kind: 'late', time: '11:15' });
+  assert.equal(q.status, 'Pending');
+  assert.match(code(() => Att.decideShort(s.ctx(D, '09:01'), s.actor('Neha'), q.id, true)), /FORBIDDEN/);
+  Att.checkIn(s.ctx(D, '11:15'), harsh);                      // 45 min late, request still pending
+  let m = Att.myMonth(s.ctx(D, '11:20'), 'harsh', '2026-11');
+  assert.equal(m.bank.passesUsed, 0);
+  assert.deepEqual(m.violations.map(v => v.rule), ['not-informed-over-30']);
+  Att.decideShort(s.ctx(D, '11:30'), aakash, q.id, true);     // Aakash approves afterwards
+  m = Att.myMonth(s.ctx(D, '11:31'), 'harsh', '2026-11');
+  assert.equal(m.violations.length, 0);                        // violation removed, never deleted from the sheet
+  assert.equal(s.db.rows('Violations')[0].disputeState, 'removed');
+  assert.equal(m.bank.used, 35);
+  assert.equal(m.bank.days[0].informed, true);
+});
+
+test('late request rejected by Aakash stays not informed; a reason is required', () => {
+  const s = seed(); const harsh = s.actor('Harsh'), aakash = s.actor('Aakash');
+  const q = Att.requestShort(s.ctx(D, '09:00'), harsh, { kind: 'late', time: '10:50' });
+  assert.match(code(() => Att.decideShort(s.ctx(D, '09:10'), aakash, q.id, false, '')), /REASON/);
+  Att.decideShort(s.ctx(D, '09:10'), aakash, q.id, false, 'Stock audit today');
+  Att.checkIn(s.ctx(D, '10:50'), harsh);
+  const m = Att.myMonth(s.ctx(D, '11:00'), 'harsh', '2026-11');
+  assert.equal(m.bank.passesUsed, 1);
+  assert.equal(m.bank.days[0].informed, false);
+});
+
+test('a pending late request does not block the partner; an approved one does (clash re-checked at approval)', () => {
+  const s = seed(); const aakash = s.actor('Aakash');
+  const b = Att.requestShort(s.ctx(D, '08:00'), s.actor('Bhawna'), { kind: 'late', time: '10:30' });
+  const p = Att.requestShort(s.ctx(D, '08:10'), s.actor('Pooja'), { kind: 'early', time: '18:00' });
+  Att.decideShort(s.ctx(D, '08:20'), aakash, b.id, true);
+  assert.match(code(() => Att.decideShort(s.ctx(D, '08:21'), aakash, p.id, true)), /Not allowed: Bhawna is off/);
 });

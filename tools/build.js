@@ -6,7 +6,7 @@ const root = path.join(__dirname, '..');
 
 const ORDER = [
   'src/rules/calendar.js', 'src/rules/clash.js', 'src/rules/leave.js', 'src/rules/minutes.js',
-  'src/server/schema.js', 'src/server/store.js', 'src/server/core.js', 'src/server/attendance.js', 'src/server/api.js',
+  'src/server/schema.js', 'src/server/store.js', 'src/server/core.js', 'src/server/attendance.js', 'src/server/admin.js', 'src/server/views.js', 'src/server/api.js',
   'src/gas/main.js',
 ];
 

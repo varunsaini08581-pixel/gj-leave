@@ -108,7 +108,7 @@
   VIEWS.home = function () {
     Promise.all([api('today'), api('notifications'), state.me.role !== 'staff' ? api('approvals') : null]).then(function (r) {
       var t = r[0], notes = r[1].slice(-5).reverse(), ap = r[2];
-      if (ap) { state.badge = ap.leaves.length + ap.outings.length + ap.devices.length + ap.absences.length; drawTabs(); }
+      if (ap) { state.badge = ap.leaves.length + ap.outings.length + ap.devices.length + ap.absences.length + ap.shorts.length; drawTabs(); }
       var cards = [h('h1', {}, 'Hello, ' + state.me.name), h('p', { class: 'sub' }, niceDate(t.date) + ' · Duty ' + state.me.dutyStart + '–' + state.me.dutyEnd)];
       var tracked = state.me.role === 'staff';
       if (tracked) {
@@ -165,7 +165,10 @@
   }
   function shortCard(t) {
     var c = h('div', { class: 'card' }, h('h2', {}, 'Late or leaving early'));
-    t.shorts.forEach(function (q) { c.appendChild(h('p', {}, [h('span', { class: 'chip blue' }, 'Informed'), ' ' + (q.kind === 'late' ? 'Arriving at ' : 'Leaving at ') + q.time])); });
+    t.shorts.forEach(function (q) {
+      var cls = q.status === 'Approved' ? 'green' : q.status === 'Rejected' ? 'red' : 'amber';
+      c.appendChild(h('p', {}, [h('span', { class: 'chip ' + cls }, q.status === 'Pending' ? 'Pending with Aakash' : q.status), ' ' + (q.kind === 'late' ? 'Arriving at ' : 'Leaving at ') + q.time + (q.decisionReason ? ' \u2014 ' + q.decisionReason : '')]));
+    });
     var kind = 'late', seg = h('div', { class: 'seg' });
     var date = h('input', { type: 'date', value: t.date, min: t.date }), time = h('input', { type: 'time' });
     function drawSeg() {
@@ -173,11 +176,11 @@
         h('button', { class: kind === 'early' ? 'on' : '', type: 'button', onclick: function () { kind = 'early'; drawSeg(); } }, 'I will leave early'));
     }
     drawSeg();
-    c.appendChild(h('p', { class: 'muted' }, 'Tell us before duty start (late) or before you leave (early). Then the minutes are "informed".'));
+    c.appendChild(h('p', { class: 'muted' }, 'Ask before duty start (late) or before you leave (early). After Aakash approves, the minutes are "informed".'));
     c.appendChild(seg); c.appendChild(h('label', {}, 'Date')); c.appendChild(date);
     c.appendChild(h('label', {}, 'Exact time (arrival or leaving)')); c.appendChild(time);
-    c.appendChild(h('div', { class: 'btns' }, button('Inform', '', function () {
-      return run(api('requestShort', { kind: kind, date: date.value, time: time.value })).then(function (r) { toast('Informed. ' + r.minutes + ' min.'); VIEWS.home(); });
+    c.appendChild(h('div', { class: 'btns' }, button('Ask Aakash', '', function () {
+      return run(api('requestShort', { kind: kind, date: date.value, time: time.value })).then(function (r) { toast('Sent to Aakash. ' + r.minutes + ' min.'); VIEWS.home(); });
     })));
     return c;
   }
@@ -273,7 +276,7 @@
   // ---------- approvals ----------
   VIEWS.approve = function () {
     run(api('approvals')).then(function (a) {
-      state.badge = a.leaves.length + a.outings.length + a.devices.length + a.absences.length; drawTabs();
+      state.badge = a.leaves.length + a.outings.length + a.devices.length + a.absences.length + a.shorts.length; drawTabs();
       var cards = [h('h1', {}, 'Approvals'), h('p', { class: 'sub' }, state.badge ? state.badge + ' waiting' : 'Nothing is waiting.')];
       function decide(label, okFn, noFn) {
         var why = h('input', { placeholder: 'Reason (required to reject)', maxlength: 120 });
@@ -288,6 +291,11 @@
           button('Open ' + r.name + '’s month', 'small', function () { state.tab = 'month'; drawTabs(); VIEWS.month(r.personId); }),
           decide('Approve', function (w) { return run(api('decideLeave', { id: r.id, approve: true, reason: w })).then(function (x) { toast(x.status); }); },
             function (w) { return run(api('decideLeave', { id: r.id, approve: false, reason: w }), 'Rejected.'); })]));
+      });
+      a.shorts.forEach(function (q) {
+        cards.push(h('div', { class: 'card' }, [h('div', { class: 'row' }, [h('strong', {}, q.name + (q.kind === 'late' ? ' \u00b7 Coming late' : ' \u00b7 Leaving early')), h('span', { class: 'chip amber' }, 'Pending')]),
+          h('p', {}, niceDate(q.date) + ' \u00b7 ' + (q.kind === 'late' ? 'arriving at ' : 'leaving at ') + q.time),
+          decide('Approve', function () { return run(api('decideShort', { id: q.id, approve: true }), 'Approved.'); }, function (w) { return run(api('decideShort', { id: q.id, approve: false, reason: w }), 'Rejected.'); })]));
       });
       a.outings.forEach(function (o) {
         if (o.status === 'Pending') cards.push(h('div', { class: 'card' }, [h('div', { class: 'row' }, [h('strong', {}, o.name + ' · Going out'), h('span', { class: 'chip amber' }, 'Pending')]),

@@ -81,6 +81,14 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - GitHub Pages enabled (main, /docs): https://varunsaini08581-pixel.github.io/gj-leave/  Demo mode: add ?demo=1
 - Redeploying after code changes: Apps Script > Deploy > Manage deployments > edit > New version (same URL). New Google permission is not needed unless a new service is added.
 
+### 20 Nov 2026, 17:11 IST
+- Owner correction applied: late / early requests now need Aakash's approval (Pending -> Approved / Rejected). Informed only when approved; if Aakash decides after the person arrived or left, the day is corrected then (approved = informed, rejected = not informed). Clash is re-checked at approval. PROVISIONAL on the 'decided later' part until the owner answers.
+- Owner (17:06): keep working without stopping; he will test later; report when everything is done.
+- `src/server/admin.js`: incidents by Aakash with the grace table (per month / per quarter, editable), disputes (24 h, once, Varun decides, removed never deletes), edit a leave (every check re-run, old violations withdrawn), Varun's override with a written reason, Settings (people, pay, rules, restrictions, grace table, shop point). Everything audited; salary amounts are not copied into the audit log.
+- `src/server/views.js`: Today board, Today at GJ, calendar with clash-risk days and restrictions, month report, month lock (only after the month ends; locked result never changes; corrections are new logged entries; no new leave in a locked month).
+- All wired into the API and the Apps Script bundle. Server on the TEST deployment is still version 1 (needs a redeploy through the owner's Chrome to pick these up).
+- Tests: 88 pass.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
