@@ -11,7 +11,7 @@ try:
         pg.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
         pg.on('pageerror', lambda e: errors.append(str(e)))
         def login(who):
-            pg.goto('http://localhost:8765/')
+            pg.goto('http://localhost:8765/?demo=1')
             pg.wait_for_selector('#who option', state='attached')
             pg.select_option('#who', who); pg.fill('#pin', '1234'); pg.click('text=Sign in')
             if pg.locator('text=Demo only: approve this phone').count() or True:
@@ -22,11 +22,12 @@ try:
             pg.wait_for_selector('text=Hello,')
         login('neha')
         pg.screenshot(path='1-home.png', full_page=True)
-        pg.click('button:has-text("Check in")'); pg.wait_for_selector('text=Checked in')
         pg.click('#tabs >> text=Apply'); pg.wait_for_selector('.result')
         pg.select_option('select', 'Personal work'); pg.fill('textarea', 'Bank work'); pg.wait_for_selector('.result.green')
         pg.screenshot(path='2-apply.png', full_page=True)
         pg.click('text=Send request'); pg.wait_for_selector('text=My requests')
+        pg.click('#tabs >> text=Today'); pg.wait_for_selector('text=Hello,')
+        pg.click('button:has-text("Check in")'); pg.wait_for_selector('text=Checked in')
         pg.click('#tabs >> text=My month'); pg.wait_for_selector('text=2-hour bank')
         pg.screenshot(path='3-month.png', full_page=True)
         # emergency request to create a pending approval

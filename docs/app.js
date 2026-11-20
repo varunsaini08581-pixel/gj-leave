@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var CFG = window.GJ_CONFIG || {};
-  var DEMO = !CFG.API_URL;
+  var DEMO = !CFG.API_URL || /[?&]demo=1/.test(location.search);
   var app = document.getElementById('app'), tabsEl = document.getElementById('tabs'), toastEl = document.getElementById('toast');
   var state = { me: null, tab: 'home', session: loadSession(), badge: 0 };
 
@@ -23,8 +23,8 @@
     toastEl.textContent = text; toastEl.className = isError ? 'err' : ''; toastEl.hidden = false;
     clearTimeout(toastTimer); toastTimer = setTimeout(function () { toastEl.hidden = true; }, isError ? 6000 : 3000);
   }
-  function loadSession() { try { return JSON.parse(localStorage.getItem('gjleave.session')) || {}; } catch (e) { return {}; } }
-  function saveSession(s) { state.session = s; try { localStorage.setItem('gjleave.session', JSON.stringify(s)); } catch (e) { /* stays in memory */ } }
+  function loadSession() { try { return JSON.parse(localStorage.getItem(DEMO ? 'gjleave.demo' : 'gjleave.session')) || {}; } catch (e) { return {}; } }
+  function saveSession(s) { state.session = s; try { localStorage.setItem(DEMO ? 'gjleave.demo' : 'gjleave.session', JSON.stringify(s)); } catch (e) { /* stays in memory */ } }
   function pad(n) { return (n < 10 ? '0' : '') + n; }
   function ist(ms) { return new Date(ms + 19800000); }
   function timeOf(ms) { var d = ist(ms); return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()); }
