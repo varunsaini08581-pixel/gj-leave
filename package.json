@@ -1,0 +1,7 @@
+{
+  "name": "gj-leave",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GJ Leave & Attendance - separate app (not part of GJ App / stock system)",
+  "scripts": { "test": "node --test" }
+}
