@@ -36,11 +36,15 @@
   function monthQuota(person, monthKey, leaveDays, cfg) {
     cfg = cfg || CFG;
     var sundays = Cal.rosterSundaysInMonth(person, monthKey);
-    var taken = 0, penaltyDays = 0;
+    var taken = 0, penaltyDays = 0, perDay = {};
     (leaveDays || []).forEach(function (l) {
       if (Cal.monthKey(l.date) !== monthKey) return;
       if (sundays.indexOf(l.date) !== -1) return;
-      if (l.penaltyEmergency) penaltyDays += l.amount; else taken += l.amount;
+      // One calendar day is never more than 1 leave, whatever came together on it
+      // (a half day plus an automatic half day plus an absence for the rest).
+      var room = Math.max(0, 1 - (perDay[l.date] || 0)), amount = Math.min(l.amount, room);
+      perDay[l.date] = (perDay[l.date] || 0) + amount;
+      if (l.penaltyEmergency) penaltyDays += amount; else taken += amount;
     });
     var total = sundays.length + taken;
     var above = Math.max(0, total - cfg.freeLeaves);

@@ -461,7 +461,9 @@ test('shop day C: late arrivals, a request decided after arrival, outings, a hal
   for (let h = 0; h < 10; h++) reminders += w.jobTwice(D(12), String(h).padStart(2, '0') + ':07', 'hourly').reminders;
   // Reminders to Aakash, every 2 hours while a request waits (the job runs at :07):
   //   Bhawna's late request (20:30): 23:07, 01:07, 03:07, 05:07, 07:07, 09:07 = 6; Pooja's leave (22:00): 00:07 ... 10:07 = 6.
-  eq(reminders, 12);
+  // Owner, 20 Nov 2026 (after this simulation was written): no reminders between 00:00 and 06:00.
+  // The night runs (00:07 ... 05:07) now send nothing; a waiting request reminds again from 06:07. 12 became 7.
+  eq(reminders, 7);
   // Next morning.
   const a2 = ok(call(D(12), '10:00', 'approvals', 'aakash'));
   eq([a2.leaves.length, a2.absences.length, a2.outings.length, a2.outNow.length, a2.shorts.length, a2.dress.length], [0, 0, 0, 0, 0, 0]);
@@ -485,7 +487,7 @@ test('shop day C: late arrivals, a request decided after arrival, outings, a hal
   eqAlerts(w.alerts(), {
     manish: { decision: 1, 'leave-tomorrow': 1 }, harsh: { decision: 1 }, bhawna: { violation: 1, decision: 1 }, pooja: { decision: 2 },
     raunak: { violation: 1, 'warn-v1': 1, dispute: 1 }, neha: { violation: 1, 'warn-v1': 1, dispute: 1 }, vikas: { incident: 1 }, anita: { out: 1 }, muskan: { out: 2 },
-    aakash: { approval: 3, reminder: 12, out: 3, violation: 2, 'missing-checkout': 1 }, varun: { violation: 3, dispute: 2, 'daily-summary': 1 } });
+    aakash: { approval: 3, reminder: 7 /* was 12 before night reminders were switched off */, out: 3, violation: 2, 'missing-checkout': 1 }, varun: { violation: 3, dispute: 2, 'daily-summary': 1 } });
   // The Sheet: one row per real event, double taps included.
   eq(['LeaveRequests', 'ShortRequests', 'Outings', 'DayMinutes', 'Violations', 'Incidents', 'Thumbs'].map(t => w.sheet(t).length), [2, 2, 2, 6, 3, 2, 9]);
   eq([w.sheet('Punches').filter(p => p.kind === 'in').length, w.sheet('Punches').filter(p => p.kind === 'out').length], [9, 9]);
@@ -796,7 +798,7 @@ test('one calendar month (November 2026, 5 Sundays) for all 11 people, every job
     // Aakash: 20 requests needing him (8 late / early, 11 leaves incl. the edit, his own entry for Harsh), 9 going-out alerts, 8 automatic violations, ...
     aakash: { override: 1, approval: 20, out: 9, violation: 8, decision: 2, dress: 2, 'leave-tomorrow': 1, 'missing-checkout': 1, absent: 2, month: 1 },
     // Varun: special approval + Aakash's leave; 10 reminders for the special approval (9 Nov 13:07 to 10 Nov 07:07, every 2 h); 10 violations; 2 disputes; 2 absences; Raunak's notice stage; 33 daily summaries.
-    varun: { 'daily-summary': 33, approval: 2, violation: 10, reminder: 10, dispute: 2, absent: 2, 'notice-stage': 1, month: 1 },
+    varun: { 'daily-summary': 33, approval: 2, violation: 10, reminder: 8 /* was 10 before the owner switched night reminders (00:00-06:00) off */, dispute: 2, absent: 2, 'notice-stage': 1, month: 1 },
   }, [['muskan', 'leave-tomorrow'], ['varun', 'out']]);
 
   // ---- THE SHEET: exactly one row per real event ----

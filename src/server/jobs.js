@@ -27,33 +27,45 @@
 
   /** One digest email per person for everything not yet emailed. In-app alerts work even with no email. */
   function sendEmails(ctx, mailer) {
+    if (ctx.db.reset) ctx.db.reset(); // start from what the Sheet holds now
     var people = {}; ctx.db.rows('People').forEach(function (p) { people[p.id] = p; });
     var groups = {};
     ctx.db.rows('Notifications').forEach(function (n) { if (!n.emailedAt) (groups[n.to] = groups[n.to] || []).push(n); });
-    var sent = 0, marks = [];
+    // Each alert is e-mailed at most once. The alerts of this run are first marked as taken, under the
+    // server lock and on fresh rows; only then are the e-mails sent. A second run that overlaps this one,
+    // or the next run after a failure, finds them taken and does not send them again.
+    var sent = 0, jobs = [], marks = [];
+    function mark(list) {
+      var write = function () { if (ctx.db.reset) ctx.db.reset(); list.forEach(function (m) { ctx.db.update('Notifications', m[0], { emailedAt: m[1] }); }); };
+      try { ctx.env.withLock(write); }
+      catch (e) { list.forEach(function (m) { ctx.db.update('Notifications', m[0], { emailedAt: m[1] }); }); if (ctx.db.flush) ctx.db.flush(); } // the lock is busy: these rows belong to this job alone
+    }
+    var left = 0; try { left = mailer.quota(); } catch (e) { left = 0; }
     Object.keys(groups).forEach(function (to) {
       var p = people[to], list = groups[to];
-      var email = p && (p.email || (p.role === 'owner' ? ctx.env.ownerEmail : ''));
-      if (!email) { list.forEach(function (n) { marks.push([n.id, -1]); }); return; } // -1 = no address, in-app only
-      var left = 0; try { left = mailer.quota(); } catch (e) { left = 0; }
+      var email = p && p.active !== false && (p.email || (p.role === 'owner' ? ctx.env.ownerEmail : ''));
+      if (!email) { list.forEach(function (n) { marks.push([n.id, -1]); }); return; } // -1 = no address (or the person has left): in-app only
       if (left < 1) return; // out of quota today: try again on the next run
+      left -= 1;
       var subject = list.length === 1 ? 'GJ Leave: ' + list[0].title : 'GJ Leave: ' + list.length + ' updates';
-      var body = list.map(function (n) { return '\u2022 ' + n.title + (n.body ? '\n  ' + n.body : ''); }).join('\n\n') + '\n\nOpen the app to act on these.';
-      try { mailer.send(email, subject, body); }
-      catch (e) { list.forEach(function (n) { marks.push([n.id, -2]); }); return; } // -2 = the address was refused: in-app only, never retried for these
+      var body = list.map(function (n) { return '\u2022 ' + n.title + (n.body ? '\n  ' + String(n.body).slice(0, 500) : ''); }).join('\n\n') + '\n\nOpen the app to act on these.';
+      jobs.push({ email: email, subject: subject, body: body.slice(0, 20000), ids: list.map(function (n) { return n.id; }) });
       list.forEach(function (n) { marks.push([n.id, ctx.now]); });
-      sent += 1;
     });
-    // The marks are written together, on fresh rows, inside the server lock.
-    ctx.env.withLock(function () {
-      if (ctx.db.reset) ctx.db.reset();
-      marks.forEach(function (m) { ctx.db.update('Notifications', m[0], { emailedAt: m[1] }); });
+    if (marks.length) mark(marks);
+    var failed = [];
+    jobs.forEach(function (j) {
+      try { mailer.send(j.email, j.subject, j.body); sent += 1; }
+      catch (e) { j.ids.forEach(function (id) { failed.push([id, -2]); }); } // -2 = the address was refused: in-app only
     });
+    if (failed.length) mark(failed);
     return sent;
   }
 
   /** A pending request reminds Aakash again every X hours (owner: 2). Varun too when he must decide. */
   function reminders(ctx) {
+    // Owner, 20 Nov 2026: no reminders between midnight and 6 in the morning.
+    if (new Date(ctx.now + H.IST_OFFSET_MS).getUTCHours() < 6) return 0;
     var hours = Number(setting(ctx, 'reminderHours')) || DEFAULT_REMINDER_HOURS, gap = hours * 3600000, n = 0;
     var names = {}; ctx.db.rows('People').forEach(function (p) { names[p.id] = p.name; });
     ctx.db.rows('LeaveRequests').forEach(function (r) {

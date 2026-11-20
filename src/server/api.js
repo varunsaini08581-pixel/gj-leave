@@ -65,6 +65,7 @@
       if (actor.role === 'staff') throw err('FORBIDDEN', 'Only Aakash or Varun.');
       var names = nameMap(ctx), day = Core._.today(ctx);
       return ctx.db.rows('LeaveRequests').filter(function (r) {
+        if (r.status === 'Absent \u2013 unannounced') return r.dates[0] >= Core._.addDays(day, -31); // absences of the last month stay findable (to excuse or take back)
         return (r.status === 'Approved' || r.status === 'Recorded' || /^(Pending|Special)/.test(r.status)) && r.route !== 'system' && r.dates[r.dates.length - 1] >= Core._.addDays(day, -7);
       }).map(function (r) { return leaveView(r, names, actor); }).sort(function (a, b) { return a.dates[0] < b.dates[0] ? -1 : 1; });
     },
@@ -146,7 +147,7 @@
           // A special request this approver has already said yes to waits for the other one, not for him.
           return !(r.route === 'special' && r.approvals[actor.role === 'owner' ? 'varun' : 'aakash'] === 'yes');
         }).map(function (r) { return Object.assign(leaveView(r, names, actor), { context: Views.pendingContext(ctx, r) }); }),
-        absences: ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Absent \u2013 unannounced' && r.decidedBy === 'system'; }).map(function (r) { return { id: r.id, name: names[r.personId], dates: r.dates }; }),
+        absences: ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Absent \u2013 unannounced' && r.decidedBy === 'system' && !Core._.closedSet(ctx)[r.dates[0]]; }).map(function (r) { return { id: r.id, name: names[r.personId], dates: r.dates }; }),
         outings: ctx.db.rows('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Back'; }).map(function (o) {
           return { id: o.id, name: names[o.personId], status: o.status, reason: o.reason, expectedMinutes: o.expectedMinutes, requestedAt: o.requestedAt, approvedAt: o.approvedAt, backAt: o.backAt, minutes: o.minutes };
         }),
@@ -219,7 +220,7 @@
   var READ_ONLY = { me: 1, previewLeave: 1, myLeaves: 1, pending: 1, effect: 1, photo: 1, myMonth: 1, today: 1, approvals: 1, incidentItems: 1,
     disputes: 1, staffLeaves: 1, getSettings: 1, restrictions: 1, board: 1, todayAtGJ: 1, calendar: 1, myRestrictions: 1, monthReport: 1, devices: 1, notifications: 1 };
   var JPEG = /^data:image\/jpeg;base64,[A-Za-z0-9+\/]+=*$/;
-  var TEXT_MAX = 2000, LIST_MAX = 400;
+  var TEXT_MAX = 2000, LIST_MAX = 400, TOTAL_MAX = 12000; // one request, without its photo, is never bigger than this
 
   /** Slow work that must not hold the lock: the photo upload. Runs after sign-in is checked, before the lock. */
   var PREPARE = {
@@ -273,6 +274,10 @@
       if (!(request.clientVersion >= MIN_CLIENT_VERSION)) return { ok: false, code: 'UPDATE', message: 'Please update the app.' };
       if (!own(PUBLIC, action) && !own(PRIVATE, action)) return { ok: false, code: 'UNKNOWN', message: 'Unknown action.' };
       checkSizes(args, '', 0);
+      // The pieces are limited one by one above; here the request as a whole (a text sent as a long list of texts must not slip through).
+      var bulk = 0; try { bulk = JSON.stringify(args, function (k, v) { return k === 'photo' || k === 'thumb' ? '' : v; }).length; } catch (e) { bulk = TOTAL_MAX + 1; }
+      if (bulk > TOTAL_MAX) return { ok: false, code: 'BLOCKED', message: 'That request is too large.' };
+      if (request.personId !== undefined && typeof request.personId !== 'string') return { ok: false, code: 'AUTH', message: 'Please sign in again.' };
       if (action === 'names') return { ok: true, data: PUBLIC.names(ctx, args) };
       if (own(PUBLIC, action)) return { ok: true, data: locked(ctx, function () { return PUBLIC[action](ctx, args); }) };
       // New code on a Sheet that has not been upgraded yet (setupOrUpgrade not run): nothing is

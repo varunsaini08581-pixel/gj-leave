@@ -168,7 +168,19 @@
   });
   // Nothing is pushed to the phone, so the screen itself must stay fresh: when the app comes back to the
   // front, and every 30 seconds while Today or Approvals is open and nobody is typing.
-  function typing() { var el = document.activeElement; return !!el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName || '') && (el.value || '') !== ''; }
+  // A form that holds anything the person entered is never redrawn under them, also after the keyboard was closed.
+  function typing() {
+    if (typeof document.querySelectorAll !== 'function') { var a = document.activeElement; return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || '') && (a.value || '') !== ''; }
+    var list = document.querySelectorAll('input, textarea, select');
+    for (var i = 0; i < list.length; i++) {
+      var el = list[i];
+      if (el.type === 'hidden' || el.type === 'file') continue;
+      if (el.tagName === 'SELECT') { for (var j = 0; j < el.options.length; j++) if (el.options[j].selected !== el.options[j].defaultSelected) return true; continue; }
+      if (el.type === 'checkbox' || el.type === 'radio') { if (el.checked !== el.defaultChecked) return true; continue; }
+      if ((el.value || '') !== (el.defaultValue || '')) return true;
+    }
+    return false;
+  }
   function refresh() { if (state.me && !state.loading && !state.sub && (state.tab === 'home' || state.tab === 'approve') && !typing() && !state.camera) VIEWS[state.tab](); }
   if (document.addEventListener) document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
   if (typeof setInterval !== 'undefined' && (!DEMO || /[?&]poll=1/.test(location.search))) setInterval(function () { if (!document.hidden) refresh(); }, 30000);

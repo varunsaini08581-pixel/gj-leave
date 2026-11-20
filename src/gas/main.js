@@ -189,7 +189,14 @@ function installTriggers() {
   ScriptApp.newTrigger('jobHourly').timeBased().everyHours(1).create();
   ScriptApp.newTrigger('jobEvening').timeBased().atHour(19).everyDays(1).inTimezone('Asia/Kolkata').create();
   ScriptApp.newTrigger('jobEndOfDay').timeBased().atHour(21).everyDays(1).inTimezone('Asia/Kolkata').create();
-  return 'Timers installed.';
+  // Nobody is marked absent for days before the timers were switched on (the Sheet may have been set up days earlier).
+  var ss = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Settings'), today = Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyy-MM-dd');
+  var rows = ss.getDataRange().getDisplayValues(), at = -1;
+  for (var i = 1; i < rows.length; i++) if (rows[i][0] === 'startDate') at = i;
+  if (at === -1) ss.getRange(ss.getLastRow() + 1, 1, 1, 4).setNumberFormat('@').setValues([['startDate', today, '', 'installTriggers']]);
+  else ss.getRange(at + 1, 2).setNumberFormat('@').setValue(today);
+  CacheService.getScriptCache().put('v:Settings', Utilities.getUuid().slice(0, 8), 21600);
+  return 'Timers installed. Absent check starts from ' + today + '.';
 }
 
 // ---------- Photos (private Drive folder; the Sheet keeps only the file id) ----------

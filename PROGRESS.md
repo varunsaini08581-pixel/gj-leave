@@ -10,6 +10,7 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Reminder to Aakash for a pending request: every 2 hours.
 - Half day = any 4 h 30 min; the staff member picks the start time.
 - Notifications: email + in-app only. No push, no Firebase, no SMS.
+- 20 Nov 19:27 IST (owner, voice): going out over 15 minutes is NOT free: the whole outing comes from the 2-hour bank. The 2-hourly reminder is never sent between 00:00 and 06:00. One reminder on the evening before is fine. (Taken as: an outing of 15 minutes or less stays free; to confirm.)
 
 ## Log
 ### 20 Nov 2026
@@ -176,6 +177,9 @@ Two screens the server already supported: 'Staff leaves: cancel or shorten' for 
 ### 20 Nov 2026, 19:23 IST
 BUG ROUND 8 (independent simulation with its own hand count: 3 shop days, a full month for 11 people with all jobs every day, the first days of the next month, and the owner's six worked examples driven as real check-ins and requests): 0 Critical, 1 High, 6 Medium, 4 Low. 586 hand-counted values compared; 564 matched, the other 22 are the findings. All six worked examples exact; no salary or reason leak in about 3,000 staff replies; no duplicate or lost rows; jobs run twice change nothing; same result with the cache on and off. All 11 fixed (test/round8.test.js); the reviewer's simulations are now part of the suite (test/sim-round8.test.js, 16 tests). Fixes: a person who was at work but could not check in can be put right (absence taken back, by hand or by entering the check-in, for any open day); a violation removed by Varun after a dispute never comes back; Varun is told about going-out and late / early requests while Aakash is on leave; ending a running leave at noon no longer makes today an absence; a leave across a locked month end can be shortened; undecided requests are closed with the month lock; withdrawn violations are announced; violation alerts name the person; retries of a correction or restriction store one row; the daily summary no longer calls a roster-off helper late; Muskan gets the evening-before reminder; 'the next not-informed time is a violation' alert. 293 tests pass. ROUND TREND (Critical/High): R1 2/4, R2 1/2, R3 1/4, R4 0/1, R5 0/1, R6 0/3, R7 0/2, R8 0/1. TEST server runs version 10 (round 7 state); this commit is not deployed yet (no schema change).
 
+### 20 Nov 2026, 19:56 IST
+Rounds 9 (0/1/7/5) and 10 (0/1/3/3) fixed: 26 reproducers pass, 319 tests. Owner's night-reminder rule built. Server version 9.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
@@ -230,6 +234,12 @@ BUG ROUND 8 (independent simulation with its own hand count: 3 shop days, a full
 50. A request of a month that nobody decided is closed when the month is locked (its days stay in the locked result as "counted, not decided").
 51. Whoever was told "Violation recorded" is also told "Violation withdrawn". A violation Varun removed after a dispute is never recorded again.
 52. OPEN, found by round 8, for the owner: (a) going out over 15 minutes: handoff 3.5 says the WHOLE outing comes from the bank (built this way), but the examples in 3.8 and 3.10 say "42 min (27 from bank)", i.e. the first 15 free. (b) Reminders every 2 hours also run through the night. (c) The evening-before reminder goes out once at about 19:00.
+53. Leave violations (unannounced, 3rd emergency, restricted period, absent) are kept in step with the leave rows by ONE routine (`syncLeaveViolations`) that runs after every change. A waiting request keeps what it has; a violation removed after a dispute never returns.
+54. Closed days are not written into the rows any more: every count leaves them out. A closed day entered by mistake can be removed and the day is as before.
+55. One calendar day never counts as more than 1 leave. No minutes of any kind on a full-leave day, a roster Sunday off or a closed day.
+56. A clash rule changed during a running leave: days already over stay approved leave, only days from today on are given back.
+57. A leave cancelled or rejected after the person came in: the late / early time of that day is counted then, as informed.
+58. Staff may edit one request at most 10 times; late / early requests only for the next 14 days, at most 8 open. `installTriggers` sets `startDate` to that day.
 
 ## Next
 - Owner still to answer: late/early request still PENDING when the person arrives - is "approved later = informed, rejected = not informed" right? (built this way)
