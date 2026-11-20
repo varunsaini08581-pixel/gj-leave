@@ -186,6 +186,9 @@ Rounds 11 (0/1/9/4) and 12 (0/1/5/10) fixed: 42 reproducers pass (2 round-12 tes
 ### 20 Nov 2026, 21:26 IST
 Rounds 13 (0/2/5/3) and 14 (0/0/5/9) fixed: 36 reproducers pass (2 test set-ups repaired, reasons in the files), 397 tests. Server version 9.
 
+### 20 Nov 2026, 22:27 IST
+Rounds 15 (0/1/5/3) and 16 (0/0/3/7) fixed: 28 reproducers pass (1 expectation adjusted with its reason: M1b retry time), 425 tests. Minutes of a day now derived from facts (deriveDay). Server version 9.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
@@ -258,6 +261,10 @@ Rounds 13 (0/2/5/3) and 14 (0/0/5/9) fixed: 36 reproducers pass (2 test set-ups 
 68. "Records only" (no approval needed) is judged by the day: switching it on or off does not add or remove violations of earlier days. A closed day removed after the day is over gets its absent check then. The month lock runs the absent check of the month's last 7 days itself, and one person can lock when the other role has no active person.
 69. A write to the Sheet that fails half-way puts the rows it had already changed back as they were, so a failed action can simply be tapped again (changed rows first, new rows last).
 70. Phones: a repeated first sign-in keeps one request but says so on the card, in Audit and by an alert; the owner's very first sign-in repeated within 15 minutes from the same phone (no other phone exists yet) gets back in; `resetOwnerPhones` also clears wrong-PIN locks on the owner. Staff: at most 6 leave requests a day. An e-mail that keeps failing is given up after 5 tries (in-app alert stays).
+71. ONE MODEL FOR A DAY (round 15): the late / early / going-out minutes of a day are worked out from the facts alone (check-in, check-out, outings, late / early requests, the leave of that day as it stands) by `deriveDay`, and `recountDay` makes the rows say exactly that after every tap and every change. The same facts give the same count whichever tap came first. This replaces the event-by-event booking and the "[was N]" notes of 67.
+72. OPEN, for the owner (replaces 66): time away counts as "informed" because of a leave when that leave (a) existed before the arrival / leaving, (b) covered those hours (a half day only its own hours), and (c) was taken back by Aakash, Varun or a rule change on that day OR LATER. A leave the person cancelled herself, or one taken back before the day began, leaves an ordinary working day. Reason: coming to work on a day of approved leave must not earn a violation because the correction was tapped a day later.
+73. A write that fails half-way is undone completely: changed rows are put back AND the new rows that did get in are blanked again, so every action is saved whole or not at all and can be tapped again.
+74. A kept check-in photo (upload failed) belongs to one person and one day. A repeated phone request alerts once. An e-mail given up after 5 failed tries leaves an Audit row and an in-app alert for the owner. The owner's first sign-in repeated within 15 minutes from the same phone gets back in (also after `resetOwnerPhones`).
 
 ## Next
 - Owner still to answer: late/early request still PENDING when the person arrives - is "approved later = informed, rejected = not informed" right? (built this way)

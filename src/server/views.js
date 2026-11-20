@@ -119,9 +119,12 @@
     var locked = ctx.db.rows('MonthSheet').filter(function (r) { return r.month === monthKey; });
     var acks = locked.filter(function (r) { return r.personId === 'lock-ack'; }).map(function (r) { return r.result.by; });
     var rows = locked.filter(function (r) { return r.personId !== 'correction' && r.personId !== 'lock-ack'; });
+    // A locked result damaged by hand is left out and named, instead of breaking the whole report.
+    var bad = rows.filter(function (r) { return !(r.result && typeof r.result === 'object' && typeof r.result.name === 'string'); }).map(function (r) { return r.personId; });
+    var good = rows.filter(function (r) { return bad.indexOf(r.personId) === -1; });
     var overrides = ctx.db.rows('LeaveRequests').filter(function (r) { return r.override && Cal.monthKey(r.dates[0]) === monthKey; })
       .map(function (r) { var p = H.find(ctx, 'People', r.personId); return { personId: r.personId, name: p ? p.name : '', dates: r.dates, reason: r.override }; });
-    if (rows.length) return { month: monthKey, locked: true, lockedBy: rows[0].lockedBy, lockedAt: rows[0].lockedAt, people: rows.map(function (r) { return r.result; }),
+    if (rows.length) return { month: monthKey, locked: true, lockedBy: rows[0].lockedBy, lockedAt: rows[0].lockedAt, people: good.map(function (r) { return r.result; }), damaged: bad,
       corrections: locked.filter(function (r) { return r.personId === 'correction'; }).map(function (r) { return r.result; }), overrides: overrides };
     return { month: monthKey, locked: false, lockConfirmedBy: acks, people: staffForMonth(ctx, monthKey).map(function (p) { return Att.myMonth(ctx, p.id, monthKey); }), corrections: [], overrides: overrides };
   }

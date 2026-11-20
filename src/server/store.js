@@ -228,7 +228,7 @@
       // (alerts, audit, violations) last; if any step fails, the rows already changed are put back as they were.
       var done = [];
       try {
-        places.forEach(function (p) { grid.writeRow(p.tab, p.at, p.cells); done.push(p); });
+        places.forEach(function (p) { done.push(p); grid.writeRow(p.tab, p.at, p.cells); }); // listed first: a row written in two pieces may fail half-way
         if (batch.length) {
           if (grid.appendMany) firstRows = grid.appendMany(batch) || {};
           else batch.forEach(function (b) {
@@ -237,7 +237,20 @@
           });
         }
       } catch (e) {
+        // Put back what was changed, and take out again the new rows that did get in (the tabs are appended one
+        // after the other): the action is then saved whole or not at all, and can simply be done again.
         done.forEach(function (p) { if (p.was) { try { grid.writeRow(p.tab, p.at, p.was); } catch (x) { /* the Sheet is down: nothing more can be done here */ } } });
+        batch.forEach(function (b) {
+          try {
+            var key = Schema.TABS[b.tab][0], kc = live[b.tab] ? live[b.tab].indexOf(key) : -1;
+            if (kc === -1) return;
+            var mine = {}; b.rows.forEach(function (r) { mine[String(r[kc])] = 1; });
+            var now = grid.readLive ? grid.readLive(b.tab) : grid.read(b.tab);
+            for (var i = now.length - 1; i >= 1 && i >= now.length - b.rows.length - 50; i--) {
+              if (now[i] && now[i][kc] !== '' && mine[String(now[i][kc])]) grid.writeRow(b.tab, i, now[i].map(function () { return ''; }));
+            }
+          } catch (x) { /* best effort */ }
+        });
         cache = {}; if (grid.reset) grid.reset();
         throw e;
       }

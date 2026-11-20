@@ -248,6 +248,12 @@
         var before = {}; PERSON_FIELDS.forEach(function (f) { before[f] = existing[f]; });
         ctx.db.update('People', p.id, clean);
         H.audit(ctx, actor.id, 'people.update', p.id, { before: before, after: clean });
+        // The change applies from today: today is counted again now, not at the person's next tap.
+        if (changed) {
+          if (H.hooks.recountDay) H.hooks.recountDay(ctx, p.id, H.today(ctx));
+          H.syncLeaveViolations(ctx, p.id);
+          if (H.hooks.syncViolations) H.hooks.syncViolations(ctx, p.id, Cal.monthKey(H.today(ctx)));
+        }
         return { id: p.id };
       }
       var id = clean.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + ctx.env.randomId().slice(0, 4);

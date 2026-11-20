@@ -35,7 +35,7 @@
       if (!f.getAttribute('aria-label') && f.getAttribute('placeholder')) f.setAttribute('aria-label', f.getAttribute('placeholder'));
     });
   }
-  function cardKey(c) { var s = c && c.querySelector && c.querySelector('strong, h2'); return s ? s.textContent : ''; }
+  function cardKey(c) { return c && c.textContent ? c.textContent.slice(0, 300) : ''; } // the whole card: two cards of one person differ by their date
   function show(nodes) {
     // A redraw that comes from the automatic refresh: dropped when the person has started to fill something in
     // meanwhile; the card in the middle of the screen stays where it is, also when a new card arrives above it.
@@ -60,7 +60,7 @@
       if (best) y += best.c.getBoundingClientRect().top - anchor.top;
     }
     window.scrollTo(0, y);
-    if (auto) setTimeout(function () { app.style.minHeight = ''; }, 4000);
+    if (auto) { clearTimeout(state.holdTimer); state.holdTimer = setTimeout(function () { app.style.minHeight = ''; }, 20000); } // long enough for a slow shop board
   }
   /** A screen that could not load: say so, and offer to try again (never an endless "Loading"). */
   function showLoadError(message) {
@@ -263,6 +263,8 @@
         var c = h('div', { class: 'card' }, h('h2', {}, 'Attendance'));
         if (!t.checkIn) {
           c.appendChild(h('p', {}, 'You have not checked in yet. The check-in photo is taken sideways (landscape) with the back camera, by another person or the tripod.'));
+          // A kept photo belongs to one person and one day: never offered to anybody else, or on another day.
+          if (state.shot && !(state.shotFor && state.shotFor.id === state.me.id && state.shotFor.date === t.date)) { state.shot = null; state.shotFor = null; }
           if (state.shot) c.appendChild(h('div', { class: 'warn' }, ['Your photo is saved on this phone but was not sent. ', button('Send again', 'primary', function () {
             var shot = state.shot;
             return run(api('checkIn', shot), 'Checked in.').then(function () { state.shot = null; VIEWS.home(); });
@@ -276,7 +278,7 @@
                 VIEWS.home();
               }, function (e) {
                 // The photo is kept: it can be sent again without setting up the second person or the tripod once more.
-                if (e.code === 'NET' || e.code === 'SERVER' || e.code === 'ERROR') { state.shot = shot; VIEWS.home(); }
+                if (e.code === 'NET' || e.code === 'SERVER' || e.code === 'ERROR') { state.shot = shot; state.shotFor = { id: state.me.id, date: t.date }; VIEWS.home(); }
                 throw e;
               });
             };
@@ -561,7 +563,7 @@
       a.devices.forEach(function (d) {
         cards.push(h('div', { class: 'card' }, [h('div', { class: 'row' }, [h('strong', {}, d.name + ' · New phone'), h('span', { class: 'chip amber' }, 'Pending')]), h('p', { class: 'muted' }, d.label),
           d.ownerRecovery ? h('p', { class: 'muted' }, 'The owner is signing in on a new phone and cannot approve it himself. Approve only after he confirms it to you in person or by a call. His old phone stops working.') : null,
-          d.askedAgainAt ? h('div', { class: 'warn' }, 'This sign-in was repeated at ' + new Date(d.askedAgainAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '. The request now belongs to the phone that asked last. Check with ' + d.name + ' before you approve.') : null,
+          d.askedAgainAt ? h('div', { class: 'warn' }, 'This sign-in was repeated at ' + timeOf(d.askedAgainAt) + '. The request now belongs to the phone that asked last. Check with ' + d.name + ' before you approve.') : null,
           h('div', { class: 'btns' }, [button('Approve phone', 'good', function () { return run(api('decideDevice', { id: d.id, approve: true }), 'Phone approved.').then(VIEWS.approve); }),
             d.ownerRecovery ? null : button('Reject', 'danger', function () { return run(api('decideDevice', { id: d.id, approve: false }), 'Rejected.').then(VIEWS.approve); })])]));
       });

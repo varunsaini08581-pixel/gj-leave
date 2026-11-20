@@ -162,20 +162,24 @@
     if (known && (known.status === 'approved' || known.status === 'pending')) return { ok: known.status === 'approved', deviceStatus: known.status, deviceId: known.id };
     var label = String(deviceLabel || '').slice(0, 120);
     var everyPhone = ctx.db.rows('Devices');
-    if (p.role === 'owner' && everyPhone.length === 1 && everyPhone[0].personId === personId && everyPhone[0].status === 'approved' && everyPhone[0].decidedBy === 'bootstrap' &&
-      everyPhone[0].label === label && ctx.now - everyPhone[0].requestedAt < 15 * 60000) {
+    // The owner's first sign-in (accepted by itself) repeated from the same phone within 15 minutes: the reply was lost,
+    // nobody else could approve it. The same phone row gets a new token; the owner is told.
+    var boot = everyPhone.filter(function (d) { return d.personId === personId && d.status === 'approved' && d.decidedBy === 'bootstrap' && d.label === label && ctx.now - d.requestedAt < 15 * 60000; })[0];
+    if (p.role === 'owner' && boot) { everyPhone = [boot];
       var retry = ctx.env.randomId() + ctx.env.randomId();
       ctx.db.update('Devices', everyPhone[0].id, { tokenHash: ctx.env.sha256(retry) });
       audit(ctx, personId, 'device.first-sign-in-repeated', everyPhone[0].id);
+      notify(ctx, personId, 'device', 'First sign-in repeated', 'Your first sign-in was repeated from a phone with the same name. If this was not you, change your PIN.', everyPhone[0].id);
       return { ok: true, deviceStatus: 'approved', deviceId: everyPhone[0].id, deviceToken: retry };
     }
     var same = ctx.db.rows('Devices').filter(function (d) { return d.personId === personId && d.status === 'pending' && d.label === label; })[0];
     if (same) {
       var again = ctx.env.randomId() + ctx.env.randomId();
       // Kept as one request, but never silently: the card says it was asked again, the approvers are told, Audit has a row.
+      var first = same.decidedBy !== 'asked-again'; // told once per request, however often the sign-in is repeated
       ctx.db.update('Devices', same.id, { tokenHash: ctx.env.sha256(again), decidedAt: ctx.now, decidedBy: 'asked-again' });
-      audit(ctx, personId, 'device.asked-again', same.id, { label: label });
-      (p.role === 'owner' ? byRole(ctx, 'manager') : byRole(ctx, 'owner')).forEach(function (o) {
+      if (first) audit(ctx, personId, 'device.asked-again', same.id, { label: label });
+      if (first) (p.role === 'owner' ? byRole(ctx, 'manager') : byRole(ctx, 'owner')).forEach(function (o) {
         notify(ctx, o.id, 'device', 'Phone request repeated: ' + p.name, 'The sign-in was repeated; the request now belongs to the phone that asked last. Approve only after ' + p.name + ' confirms it is the phone in hand.', same.id);
       });
       return { ok: false, deviceStatus: 'pending', deviceId: same.id, deviceToken: again };
@@ -543,12 +547,12 @@
   function markAbsent(ctx, p, date, kind, why) {
     if (closedSet(ctx)[date] || lockedMonths(ctx)[Cal.monthKey(date)]) return null;
     var row = { id: ctx.env.randomId(), personId: p.id, kind: kind || 'full', dates: [date], halfStart: '', reasonCode: '', reasonText: '', submittedAt: ctx.now,
-      type: 'Unannounced', noticeHours: 0, run: 1, route: 'system', status: p.noApproval ? 'Recorded' : ABSENT, approvals: {},
+      type: 'Unannounced', noticeHours: 0, run: 1, route: 'system', status: Cal.asOn(p, date).noApproval ? 'Recorded' : ABSENT, approvals: {},
       extremeEmergency: false, emergencyNo: 0, penaltyEmergency: false, restrictionViolation: false, enteredBy: 'system', decidedAt: ctx.now,
       decidedBy: 'system', decisionReason: why || '', history: [{ at: ctx.now, by: 'system', action: 'absent-no-request' }] };
     ctx.db.insert('LeaveRequests', row);
     var day = date.slice(8) + '-' + date.slice(5, 7);
-    if (!p.noApproval) {
+    if (!Cal.asOn(p, date).noApproval) {
       ctx.db.insert('Violations', { id: ctx.env.randomId(), personId: p.id, date: date, rule: 'absent-no-request', source: 'auto', proof: row.id, note: '',
         createdBy: 'system', createdAt: stamp(ctx), disputeState: '', disputeAt: '', disputeText: '', disputeDecidedBy: '', disputeDecidedAt: '' });
       notify(ctx, p.id, 'violation', ABSENT, (why || 'No request and no check-in') + ' on ' + day + '.', row.id);

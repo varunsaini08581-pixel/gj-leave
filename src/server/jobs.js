@@ -54,16 +54,27 @@
       list.forEach(function (n) { marks.push([n.id, ctx.now]); });
     });
     if (marks.length) mark(marks);
-    var failed = [];
+    var failed = [], lost = [];
     jobs.forEach(function (j) {
       try { mailer.send(j.email, j.subject, j.body); sent += 1; }
       catch (e) {
         // Only an address that was refused is given up (-2 = in-app only). Anything else (Gmail busy, a passing fault) is tried again on the next run.
         var refused = /invalid email|invalid recipient|address/i.test(String(e && e.message || e)) && !/too many times|timed out|try again/i.test(String(e && e.message || e));
-        j.ids.forEach(function (id, i) { var n = j.tries[i] + 1; failed.push([id, refused || n >= 5 ? -2 : -10 - n]); });
+        var gaveUp = false;
+        j.ids.forEach(function (id, i) { var n = j.tries[i] + 1; if (refused || n >= 5) gaveUp = true; failed.push([id, refused || n >= 5 ? -2 : -10 - n]); });
+        if (gaveUp) lost.push(j.email + ': ' + String(e && e.message || e).slice(0, 120));
       }
     });
     if (failed.length) mark(failed);
+    // An e-mail that was given up is never silent: Audit has a row and the owner gets an in-app alert (the alerts themselves stay in the app).
+    if (lost.length) {
+      var say = function () {
+        H.audit(ctx, 'system', 'email.given-up', '', { to: lost });
+        H.byRole(ctx, 'owner').forEach(function (o) { H.notify(ctx, o.id, 'system', 'E-mail could not be sent', lost.length + ' e-mail(s) were given up after repeated failures. The alerts are in the app. ' + lost[0], ''); });
+        ctx.db.rows('Notifications').forEach(function (n) { if (n.kind === 'system' && n.title === 'E-mail could not be sent' && !n.emailedAt) ctx.db.update('Notifications', n.id, { emailedAt: -1 }); });
+      };
+      try { ctx.env.withLock(function () { if (ctx.db.reset) ctx.db.reset(); say(); }); } catch (x) { say(); if (ctx.db.flush) ctx.db.flush(); }
+    }
     return sent;
   }
 
