@@ -29,9 +29,16 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Built `calendar.js` (nth Sunday, roster), `clash.js` (C1, C1-Sun, C1-E, C2, C3, C4 as data, per-day), `leave.js` (notice type, month quota with roster Sundays, Anita, run length, who decides).
 - Tests: 27 of 27 pass.
 
+### 20 Nov 2026, 16:03 - owner answer
+- Emergencies: the 3rd, 4th, 5th... in a month EACH give +1 violation plus 1 extra day's leave cut (estimate).
+- Built `emergencyPenalty` and `checkRestrictions` (no-leave / allowed-with-penalty, applies-to list, default excludes Anita and Muskan).
+- Sent the owner the steps to create repo `gj-leave` and give Claude access.
+- Tests: 29 of 29 pass.
+
 ## To confirm with the owner (not blocking)
-1. Per-day clash also covers "Going out": if Bhawna was late today, Pooja's going-out request today is blocked too. Built this way; flagged to the owner.
-2. Emergencies: the 3rd in a month gives +1 violation. Is it also +1 for the 4th, 5th...? Not coded yet.
+1. Per-day clash also covers "Going out". Built this way; flagged to the owner, no objection so far.
+2. Emergency "1 extra day": coded as 1 day's salary on top of the normal quota rule, even when the person is still inside the 5 leaves. Example sent to the owner for confirmation.
+3. "Leave allowed with Rs 500 penalty" restriction: coded as Rs 500 per restricted day (the old WhatsApp line says "Rs 500 per leave").
 
 ## Blocked
 - Repo `gj-leave`: waiting for the owner to create it and give Claude access.

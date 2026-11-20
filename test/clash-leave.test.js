@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const Cal = require('../src/rules/calendar.js');
 const { checkRequest, ruleBroken, awayOn, DEFAULT_RULES } = require('../src/rules/clash.js');
-const { noticeType, monthQuota, runLength, route } = require('../src/rules/leave.js');
+const { noticeType, monthQuota, runLength, route, emergencyPenalty, checkRestrictions } = require('../src/rules/leave.js');
 
 const people = {
   Neha: { sundayOff: [3, 4] }, Vikas: { sundayOff: [1, 2] }, Harsh: { sundayOff: [1, 2] },
@@ -148,4 +148,29 @@ test('who decides', () => {
   assert.equal(d({ person: people.Muskan }), 'recorded');
   assert.equal(d({ person: people.Anita }), 'aakash');
   assert.equal(d({ person: { isManager: true } }), 'varun');
+});
+
+test('emergencies: 2 are fine; the 3rd, 4th, 5th each give 1 violation and 1 extra day', () => {
+  const p = { salary: 17000 };
+  assert.deepEqual([0, 2, 3, 4, 5].map(n => emergencyPenalty(p, n).violations), [0, 0, 1, 2, 3]);
+  assert.equal(emergencyPenalty(p, 2).wouldBeDeducted, 0);
+  assert.equal(emergencyPenalty(p, 3).wouldBeDeducted, 567);
+  assert.equal(emergencyPenalty(p, 5).wouldBeDeducted, 1700);
+  assert.equal(emergencyPenalty(p, 1).left, 1);
+});
+
+test('restrictions: no-leave blocks, penalty allows with amount, default skips Anita and Muskan', () => {
+  const peak = [{ id: 'R1', from: '2026-11-05', to: '2026-11-10', note: 'Peak sales season', rule: 'no-leave', appliesTo: null }];
+  assert.equal(checkRestrictions('Neha', people.Neha, ['2026-11-06'], peak).blocked, true);
+  assert.equal(checkRestrictions('Neha', people.Neha, ['2026-11-11'], peak).blocked, false);
+  assert.equal(checkRestrictions('Anita', people.Anita, ['2026-11-06'], peak).blocked, false);
+  assert.equal(checkRestrictions('Muskan', people.Muskan, ['2026-11-06'], peak).blocked, false);
+  const withAnita = [{ ...peak[0], appliesTo: ['Anita', 'Neha'] }];
+  assert.equal(checkRestrictions('Anita', people.Anita, ['2026-11-06'], withAnita).blocked, true);
+  assert.equal(checkRestrictions('Vikas', people.Vikas, ['2026-11-06'], withAnita).blocked, false);
+  const aug = [{ id: 'R2', from: '2026-08-03', to: '2026-08-07', note: 'No leave week', rule: 'penalty', penalty: 500, appliesTo: null }];
+  const r = checkRestrictions('Neha', people.Neha, ['2026-08-04', '2026-08-05'], aug);
+  assert.equal(r.blocked, false);
+  assert.equal(r.penalty, 1000);
+  assert.equal(checkRestrictions('Neha', people.Neha, ['2026-11-06'], [{ ...peak[0], on: false }]).blocked, false);
 });

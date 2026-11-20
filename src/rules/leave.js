@@ -9,6 +9,9 @@
   var CFG = {
     freeLeaves: 5,            // per calendar month, includes roster Sundays and emergencies
     maxEmergencies: 2,        // inside the 5
+    // Owner, 20 Nov 2026: the 3rd, 4th, 5th... emergency in a month EACH give +1 violation
+    // and 1 extra day's salary "would be deducted".
+    emergencyPenaltyDays: 1,
     regularNoticeHours: 36,
     emergencyNoticeHours: 3,
     autoNoticeHours: 48,
@@ -51,6 +54,49 @@
       dayRate: dayRate,
       wouldBeDeducted: Math.round(above * dayRate) // estimate only
     };
+  }
+
+  /**
+   * Emergencies in a month. emergencyCount = approved/recorded Emergency requests that month.
+   * Returns the violations and extra "would be deducted" days caused by emergencies beyond the limit.
+   */
+  function emergencyPenalty(person, emergencyCount, cfg) {
+    cfg = cfg || CFG;
+    var beyond = Math.max(0, emergencyCount - cfg.maxEmergencies);
+    var days = beyond * cfg.emergencyPenaltyDays;
+    return {
+      emergencies: emergencyCount,
+      left: Math.max(0, cfg.maxEmergencies - emergencyCount),
+      violations: beyond,
+      extraDays: days,
+      wouldBeDeducted: Math.round(days * (person.salary ? person.salary / 30 : 0)) // estimate only
+    };
+  }
+
+  /**
+   * Restrictions (blackout periods, handoff Part 3.6).
+   * restrictions: [{ id, from, to, note, rule: 'no-leave' | 'penalty', penalty, appliesTo: [names] | null, on }]
+   * appliesTo null = default = all staff except Anita and Muskan (people with noClash).
+   * Returns { blocked, penalties: [{date, amount, note}], hits: [...] }. Only Varun can override a block.
+   */
+  function checkRestrictions(personName, person, dates, restrictions) {
+    var out = { blocked: false, penalty: 0, hits: [] };
+    (restrictions || []).forEach(function (r) {
+      if (r.on === false) return;
+      var applies = r.appliesTo ? r.appliesTo.indexOf(personName) !== -1 : !person.noClash;
+      if (!applies) return;
+      dates.forEach(function (d) {
+        if (d < r.from || d > r.to) return;
+        if (r.rule === 'penalty') {
+          out.penalty += r.penalty || 0;
+          out.hits.push({ id: r.id, date: d, rule: 'penalty', message: 'Restricted period (' + r.note + '): leave allowed with Rs ' + (r.penalty || 0) + ' penalty.' });
+        } else {
+          out.blocked = true;
+          out.hits.push({ id: r.id, date: d, rule: 'no-leave', message: 'Not allowed: no leave during this period (' + r.note + ').' });
+        }
+      });
+    });
+    return out;
   }
 
   /**
@@ -100,7 +146,8 @@
     return { decision: 'auto', reasons: ['Will be auto-approved.'] };
   }
 
-  var api = { CFG: CFG, noticeType: noticeType, monthQuota: monthQuota, runLength: runLength, route: route };
+  var api = { CFG: CFG, noticeType: noticeType, monthQuota: monthQuota, runLength: runLength, route: route,
+    emergencyPenalty: emergencyPenalty, checkRestrictions: checkRestrictions };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJLeave = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
