@@ -152,6 +152,9 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Bug rounds 1-3 started with three independent review agents (rule correctness vs the handoff, privacy and security, concurrency / dates / storage). They only write findings and failing reproducers; fixes follow.
 - Tests: 117 pass.
 
+### 20 Nov 2026, 17:58 IST
+Staff guide (5 pages, Hinglish) and owner page (3 pages) written; built by tools/staff-guide.py and tools/owner-guide.py. Not yet sent to the owner as final: wording follows the rules as built today and must be rebuilt if a bug round changes a rule.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
