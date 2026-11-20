@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const Cal = require('../src/rules/calendar.js');
 const { checkRequest, ruleBroken, awayOn, DEFAULT_RULES } = require('../src/rules/clash.js');
-const { noticeType, monthQuota, runLength, route, emergencyPenalty, checkRestrictions } = require('../src/rules/leave.js');
+const { noticeType, monthQuota, runLength, route, emergencyStatus, isPenaltyEmergency, checkRestrictions } = require('../src/rules/leave.js');
 
 const people = {
   Neha: { sundayOff: [3, 4] }, Vikas: { sundayOff: [1, 2] }, Harsh: { sundayOff: [1, 2] },
@@ -150,16 +150,28 @@ test('who decides', () => {
   assert.equal(d({ person: { isManager: true } }), 'varun');
 });
 
-test('emergencies: 2 are fine; the 3rd, 4th, 5th each give 1 violation and 1 extra day', () => {
-  const p = { salary: 17000 };
-  assert.deepEqual([0, 2, 3, 4, 5].map(n => emergencyPenalty(p, n).violations), [0, 0, 1, 2, 3]);
-  assert.equal(emergencyPenalty(p, 2).wouldBeDeducted, 0);
-  assert.equal(emergencyPenalty(p, 3).wouldBeDeducted, 567);
-  assert.equal(emergencyPenalty(p, 5).wouldBeDeducted, 1700);
-  assert.equal(emergencyPenalty(p, 1).left, 1);
+test('emergencies: 2 are fine; the 3rd, 4th, 5th are each a violation and never a free leave', () => {
+  assert.deepEqual([0, 2, 3, 4, 5].map(n => emergencyStatus(n).violations), [0, 0, 1, 2, 3]);
+  assert.deepEqual([1, 2, 3, 4].map(n => isPenaltyEmergency(n)), [false, false, true, true]);
+  const vikas = { ...people.Vikas, salary: 17000 }; // 2 roster Sundays in Nov 2026
+  const e = (d, pen) => ({ date: '2026-11-' + d, amount: 1, penaltyEmergency: pen });
+  // Owner example: 2 Sundays + 2 emergencies = 4 leaves, nothing cut.
+  const two = monthQuota(vikas, '2026-11', [e('10'), e('12')]);
+  assert.equal(two.total, 4);
+  assert.equal(two.wouldBeDeducted, 0);
+  // 3rd emergency: not counted as free (total stays 4), 1 day cut.
+  const three = monthQuota(vikas, '2026-11', [e('10'), e('12'), e('17', true)]);
+  assert.equal(three.total, 4);
+  assert.equal(three.left, 1);
+  assert.equal(three.daysCut, 1);
+  assert.equal(three.wouldBeDeducted, 567);
+  // Already above 5, then a penalty emergency: still exactly 1 day for it, not 2.
+  const many = monthQuota(vikas, '2026-11', [e('10'), e('12'), e('13'), e('14'), e('17', true)]);
+  assert.equal(many.daysAboveQuota, 1);
+  assert.equal(many.daysCut, 2);
 });
 
-test('restrictions: no-leave blocks, penalty allows with amount, default skips Anita and Muskan', () => {
+test('restrictions: no-leave blocks, violation-type allows with 1 violation, default skips Anita and Muskan', () => {
   const peak = [{ id: 'R1', from: '2026-11-05', to: '2026-11-10', note: 'Peak sales season', rule: 'no-leave', appliesTo: null }];
   assert.equal(checkRestrictions('Neha', people.Neha, ['2026-11-06'], peak).blocked, true);
   assert.equal(checkRestrictions('Neha', people.Neha, ['2026-11-11'], peak).blocked, false);
@@ -168,9 +180,10 @@ test('restrictions: no-leave blocks, penalty allows with amount, default skips A
   const withAnita = [{ ...peak[0], appliesTo: ['Anita', 'Neha'] }];
   assert.equal(checkRestrictions('Anita', people.Anita, ['2026-11-06'], withAnita).blocked, true);
   assert.equal(checkRestrictions('Vikas', people.Vikas, ['2026-11-06'], withAnita).blocked, false);
-  const aug = [{ id: 'R2', from: '2026-08-03', to: '2026-08-07', note: 'No leave week', rule: 'penalty', penalty: 500, appliesTo: null }];
+  const aug = [{ id: 'R2', from: '2026-08-03', to: '2026-08-07', note: 'No leave week', rule: 'violation', appliesTo: null }];
   const r = checkRestrictions('Neha', people.Neha, ['2026-08-04', '2026-08-05'], aug);
   assert.equal(r.blocked, false);
-  assert.equal(r.penalty, 1000);
+  assert.equal(r.violations, 1);
+  assert.equal(checkRestrictions('Neha', people.Neha, ['2026-08-10'], aug).violations, 0);
   assert.equal(checkRestrictions('Neha', people.Neha, ['2026-11-06'], [{ ...peak[0], on: false }]).blocked, false);
 });

@@ -35,13 +35,14 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Sent the owner the steps to create repo `gj-leave` and give Claude access.
 - Tests: 29 of 29 pass.
 
-## To confirm with the owner (not blocking)
-1. Per-day clash also covers "Going out". Built this way; flagged to the owner, no objection so far.
-2. Emergency "1 extra day": coded as 1 day's salary on top of the normal quota rule, even when the person is still inside the 5 leaves. Example sent to the owner for confirmation.
-3. "Leave allowed with Rs 500 penalty" restriction: coded as Rs 500 per restricted day (the old WhatsApp line says "Rs 500 per leave").
+### 20 Nov 2026, 16:08 - owner answers
+- 3rd/4th/5th emergency: it is a violation, so it is NOT counted as a free leave. +1 violation and that day's salary is cut (1 day), whether or not the person is inside the 5. Rewrote `monthQuota` (penaltyEmergency days) and `emergencyStatus`.
+- Restricted period of the "allowed" kind: leave there = +1 violation. No money penalty at all. Rule renamed from 'penalty' to 'violation'.
+- Owner created repo `gj-leave` and gave access.
 
-## Blocked
-- Repo `gj-leave`: waiting for the owner to create it and give Claude access.
+## To confirm with the owner (not blocking)
+1. Per-day clash also covers "Going out". Built this way; flagged to the owner twice, no objection.
+2. Restricted period (violation kind): coded as 1 violation per leave request, not per day.
 
 ## Next
 - Restrictions (blackout periods), 3rd-emergency violation, absent-with-no-request, edit/cancel re-check.

@@ -9,9 +9,8 @@
   var CFG = {
     freeLeaves: 5,            // per calendar month, includes roster Sundays and emergencies
     maxEmergencies: 2,        // inside the 5
-    // Owner, 20 Nov 2026: the 3rd, 4th, 5th... emergency in a month EACH give +1 violation
-    // and 1 extra day's salary "would be deducted".
-    emergencyPenaltyDays: 1,
+    // Owner, 20 Nov 2026: the 3rd, 4th, 5th... emergency in a month is a violation. It is NOT
+    // counted as a free leave: each such day is 1 day's salary "would be deducted", plus +1 violation.
     regularNoticeHours: 36,
     emergencyNoticeHours: 3,
     autoNoticeHours: 48,
@@ -30,17 +29,18 @@
 
   /**
    * Month quota for one person.
-   * leaveDays: [{ date, amount: 1 | 0.5 }] approved leave in that month (roster Sundays NOT included here).
-   * Roster Sundays are added automatically; a leave on a roster Sunday is not counted twice.
+   * leaveDays: [{ date, amount: 1 | 0.5, penaltyEmergency?: true }] approved leave in that month
+   *   (roster Sundays NOT included here; they are added automatically and never counted twice).
+   * penaltyEmergency = a day of the 3rd/4th/5th... emergency: never free, always 1 day cut.
    */
   function monthQuota(person, monthKey, leaveDays, cfg) {
     cfg = cfg || CFG;
     var sundays = Cal.rosterSundaysInMonth(person, monthKey);
-    var taken = 0;
+    var taken = 0, penaltyDays = 0;
     (leaveDays || []).forEach(function (l) {
       if (Cal.monthKey(l.date) !== monthKey) return;
       if (sundays.indexOf(l.date) !== -1) return;
-      taken += l.amount;
+      if (l.penaltyEmergency) penaltyDays += l.amount; else taken += l.amount;
     });
     var total = sundays.length + taken;
     var above = Math.max(0, total - cfg.freeLeaves);
@@ -48,53 +48,50 @@
     return {
       rosterSundays: sundays.length,
       leavesTaken: taken,
-      total: total,
+      total: total,                       // counted inside the 5
       left: Math.max(0, cfg.freeLeaves - total),
       daysAboveQuota: above,
+      penaltyEmergencyDays: penaltyDays,  // outside the 5, always cut
+      daysCut: above + penaltyDays,
       dayRate: dayRate,
-      wouldBeDeducted: Math.round(above * dayRate) // estimate only
+      wouldBeDeducted: Math.round((above + penaltyDays) * dayRate) // estimate only
     };
   }
 
   /**
-   * Emergencies in a month. emergencyCount = approved/recorded Emergency requests that month.
-   * Returns the violations and extra "would be deducted" days caused by emergencies beyond the limit.
+   * Emergencies in a month. emergencyCount = Emergency requests that month, in order.
+   * Each one beyond the limit gives +1 violation; its days are flagged penaltyEmergency for monthQuota.
    */
-  function emergencyPenalty(person, emergencyCount, cfg) {
+  function emergencyStatus(emergencyCount, cfg) {
     cfg = cfg || CFG;
     var beyond = Math.max(0, emergencyCount - cfg.maxEmergencies);
-    var days = beyond * cfg.emergencyPenaltyDays;
-    return {
-      emergencies: emergencyCount,
-      left: Math.max(0, cfg.maxEmergencies - emergencyCount),
-      violations: beyond,
-      extraDays: days,
-      wouldBeDeducted: Math.round(days * (person.salary ? person.salary / 30 : 0)) // estimate only
-    };
+    return { emergencies: emergencyCount, left: Math.max(0, cfg.maxEmergencies - emergencyCount), violations: beyond };
   }
+  /** Is the nth emergency of the month (1-based) a penalty emergency? */
+  function isPenaltyEmergency(n, cfg) { return n > (cfg || CFG).maxEmergencies; }
 
   /**
    * Restrictions (blackout periods, handoff Part 3.6).
-   * restrictions: [{ id, from, to, note, rule: 'no-leave' | 'penalty', penalty, appliesTo: [names] | null, on }]
+   * restrictions: [{ id, from, to, note, rule: 'no-leave' | 'violation', appliesTo: [names] | null, on }]
    * appliesTo null = default = all staff except Anita and Muskan (people with noClash).
-   * Returns { blocked, penalties: [{date, amount, note}], hits: [...] }. Only Varun can override a block.
+   * 'violation' rule (owner, 20 Nov 2026): leave is allowed but counts as +1 violation. No money penalty.
+   * Returns { blocked, violations, hits: [...] }. Only Varun can override a block.
    */
   function checkRestrictions(personName, person, dates, restrictions) {
-    var out = { blocked: false, penalty: 0, hits: [] };
+    var out = { blocked: false, violations: 0, hits: [] };
     (restrictions || []).forEach(function (r) {
       if (r.on === false) return;
       var applies = r.appliesTo ? r.appliesTo.indexOf(personName) !== -1 : !person.noClash;
       if (!applies) return;
-      dates.forEach(function (d) {
-        if (d < r.from || d > r.to) return;
-        if (r.rule === 'penalty') {
-          out.penalty += r.penalty || 0;
-          out.hits.push({ id: r.id, date: d, rule: 'penalty', message: 'Restricted period (' + r.note + '): leave allowed with Rs ' + (r.penalty || 0) + ' penalty.' });
-        } else {
-          out.blocked = true;
-          out.hits.push({ id: r.id, date: d, rule: 'no-leave', message: 'Not allowed: no leave during this period (' + r.note + ').' });
-        }
-      });
+      var inside = dates.filter(function (d) { return d >= r.from && d <= r.to; });
+      if (!inside.length) return;
+      if (r.rule === 'violation') {
+        out.violations += 1; // one violation per request per restriction
+        out.hits.push({ id: r.id, dates: inside, rule: 'violation', message: 'Restricted period (' + r.note + '): leave here counts as 1 violation.' });
+      } else {
+        out.blocked = true;
+        out.hits.push({ id: r.id, dates: inside, rule: 'no-leave', message: 'Not allowed: no leave during this period (' + r.note + ').' });
+      }
     });
     return out;
   }
@@ -147,7 +144,7 @@
   }
 
   var api = { CFG: CFG, noticeType: noticeType, monthQuota: monthQuota, runLength: runLength, route: route,
-    emergencyPenalty: emergencyPenalty, checkRestrictions: checkRestrictions };
+    emergencyStatus: emergencyStatus, isPenaltyEmergency: isPenaltyEmergency, checkRestrictions: checkRestrictions };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJLeave = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
