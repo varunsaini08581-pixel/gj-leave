@@ -2507,6 +2507,7 @@ function gjGrid_() {
       sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setNumberFormat('@'); // plain text everywhere
     },
     read: function (name) {
+      gjReads_ += 1;
       var sh = ss.getSheetByName(name);
       if (!sh || sh.getLastRow() === 0) return [];
       return sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
@@ -2553,6 +2554,9 @@ function gjGrid_() {
   };
 }
 
+var gjReads_ = 0;
+var gjT_ = {}; // where the time of a request went (returned as _t, for tuning)
+function gjTime_(key, fn) { var a = Date.now(); try { return fn(); } finally { gjT_[key] = (gjT_[key] || 0) + Date.now() - a; } }
 var gjLockDepth_ = 0;
 var gjDb_ = null; // the request's db, so buffered writes are flushed before the lock is released
 
@@ -2563,16 +2567,16 @@ function gjEnv_() {
       return bytes.map(function (b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
     },
     randomId: function () { return Utilities.getUuid().replace(/-/g, ''); },
-    savePhoto: function (name, data) { return gjSavePhoto_(name, data); },
+    savePhoto: function (name, data) { return gjTime_('drive', function () { return gjSavePhoto_(name, data); }); },
     readPhoto: function (id) { return gjReadPhoto_(id); },
     withLock: function (fn) {
       if (gjLockDepth_ > 0) return fn(); // already inside the lock in this run
       var lock = LockService.getScriptLock();
-      lock.waitLock(25000);
+      gjTime_('lockWait', function () { lock.waitLock(25000); });
       gjLockDepth_ += 1;
       // Writes are flushed while the lock is still held, also when the action ends with an error
       // (for example a wrong PIN must still be counted).
-      try { return fn(); } finally { try { if (gjDb_) gjDb_.flush(); } finally { gjLockDepth_ -= 1; lock.releaseLock(); } }
+      try { return fn(); } finally { try { if (gjDb_) gjTime_('flush', function () { gjDb_.flush(); }); } finally { gjLockDepth_ -= 1; lock.releaseLock(); } }
     }
   };
 }
@@ -2612,9 +2616,11 @@ function setupOrUpgrade() {
 function doPost(e) {
   var request = {};
   try { request = JSON.parse(e.postData.contents); } catch (err) { request = {}; }
+  var t0 = Date.now(); gjT_ = {};
   var ctx = gjCtx_();
   var reply = GJApi.handle(ctx, request);
-  ctx.db.flush(); // anything written outside a locked action (login, reads that log)
+  ctx.db.flush(); // anything written outside a locked action
+  gjT_.total = Date.now() - t0; gjT_.sheetReads = gjReads_; reply._t = gjT_;
   return ContentService.createTextOutput(JSON.stringify(reply)).setMimeType(ContentService.MimeType.JSON);
 }
 
