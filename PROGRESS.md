@@ -40,11 +40,24 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Restricted period of the "allowed" kind: leave there = +1 violation. No money penalty at all. Rule renamed from 'penalty' to 'violation'.
 - Owner created repo `gj-leave` and gave access.
 
-## To confirm with the owner (not blocking)
-1. Per-day clash also covers "Going out". Built this way; flagged to the owner twice, no objection.
-2. Restricted period (violation kind): coded as 1 violation per leave request, not per day.
+### 20 Nov 2026, 16:22 - owner answers + backend core
+- Restricted period (violation kind): 1 violation per leave request, even for 2 days. Confirmed.
+- Owner wants near-continuous work. Told him plainly: work happens only inside runs; runs are chained with scheduled wake-ups. Revised estimate: first working version on the test Sheet by Sat 21 Nov evening; "ready" Mon 23 night or Tue 24 Nov.
+- Code pushed to GitHub `varunsaini08581-pixel/gj-leave` (branch main).
+- Built `src/server/schema.js` (13 tabs; added Devices and Notifications to the handoff list as implementation tabs).
+- Built `src/server/core.js`: PIN (salted hash, 5 wrong tries = 15 min lock), phone binding (owner approves, one phone per person, new phone revokes old), authenticate, leave preview / submit / decide / cancel, server lock, re-check at approval ("Rejected - clash"), special approval (Aakash AND Varun), auto violations (unannounced, emergency beyond 2, restricted period), audit and notification rows.
+- Tests: 45 of 45 pass (rules + server).
+
+## Assumptions made in code (to show the owner together, not blocking)
+1. Per-day clash also covers "Going out". Flagged to the owner twice, no objection.
+2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested. If Aakash rejects it, no violation from that request.
+3. Reason list on the form: Sick, Family function, Family emergency, Personal work, Travel, Exam, Other (+ free text always required). The handoff says "from a list" but gives no list.
+4. One request = consecutive dates only. Non-consecutive days need separate requests.
+5. PIN is 4 to 6 digits.
 
 ## Next
-- Restrictions (blackout periods), 3rd-emergency violation, absent-with-no-request, edit/cancel re-check.
-- 12-person month simulation against a hand count.
-- Test Sheet + Apps Script skeleton; first deploy through the owner's Chrome.
+- Sheet store adapter + Apps Script entry (doGet/doPost), idempotent setup function, build script that bundles `src/` into `apps-script/`.
+- Short leave / late / early / going-out requests and check-in/out in the server core (uses `minutes.js`).
+- Absent-with-no-request end-of-day job, edit-after-approval, 12-person month simulation.
+- First phone screens.
+- Needs the owner's Chrome: create test Sheet "GJ Leave - TEST", paste/deploy Apps Script, Google "Allow".
