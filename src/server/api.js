@@ -119,7 +119,7 @@
       if (actor.role === 'staff') throw err('FORBIDDEN', 'Only Aakash or Varun.');
       var names = nameMap(ctx);
       var out = {
-        leaves: ctx.db.rows('LeaveRequests').filter(function (r) { return /^(Pending|Special)/.test(r.status); }).map(function (r) { return leaveView(r, names, actor); }),
+        leaves: ctx.db.rows('LeaveRequests').filter(function (r) { return /^(Pending|Special)/.test(r.status); }).map(function (r) { return Object.assign(leaveView(r, names, actor), { context: Views.pendingContext(ctx, r) }); }),
         absences: ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Absent \u2013 unannounced'; }).map(function (r) { return { id: r.id, name: names[r.personId], dates: r.dates }; }),
         outings: ctx.db.rows('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Back'; }).map(function (o) {
           return { id: o.id, name: names[o.personId], status: o.status, reason: o.reason, expectedMinutes: o.expectedMinutes, requestedAt: o.requestedAt, approvedAt: o.approvedAt, backAt: o.backAt, minutes: o.minutes };

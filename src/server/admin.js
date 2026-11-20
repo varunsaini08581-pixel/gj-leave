@@ -126,6 +126,8 @@
       if (ctx.now >= Core.toMs(r.dates[0], r.kind === 'half' ? r.halfStart : person.dutyStart) && actor.role === 'staff') H.fail('FORBIDDEN', 'This leave has started. Ask Aakash or Varun.');
       var ev = H.evaluate(ctx, person, input, id);
       if (ev.decision === 'blocked') H.fail('BLOCKED', ev.reasons.join(' '));
+      // Handoff Part 6: an edit after approval goes back to pending. It is never approved again by the system.
+      if (r.status === 'Approved' && ev.decision === 'auto') { ev.decision = 'aakash'; ev.reasons = ['Edited after approval.']; }
       // Violations that came from the old version are withdrawn; the new version earns its own.
       H.withdrawViolations(ctx, id, 'Request edited');
       var patch = { kind: input.kind, dates: ev.dates, halfStart: input.halfStart || '', reasonCode: input.reasonCode, reasonText: String(input.reasonText).trim(),

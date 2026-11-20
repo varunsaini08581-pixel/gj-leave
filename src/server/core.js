@@ -231,7 +231,7 @@
     if (!String(input.reasonText || '').trim()) problems.push('Write the reason.');
     if (problems.length) return { decision: 'blocked', reasons: problems, valid: false };
 
-    var lockedSet = {}; ctx.db.rows('MonthSheet').forEach(function (m) { lockedSet[m.month] = true; });
+    var lockedSet = {}; ctx.db.rows('MonthSheet').forEach(function (m) { if (m.personId !== 'lock-ack' && m.personId !== 'correction') lockedSet[m.month] = true; });
     if (dates.some(function (d) { return lockedSet[Cal.monthKey(d)]; })) return { decision: 'blocked', reasons: ['This month is locked.'], valid: false };
 
     var others = liveLeaves(ctx, person.id, exceptId);
@@ -290,6 +290,19 @@
     if (penaltyEmergency) warnings.push('This is emergency no. ' + emergencyNo + ' this month: 1 violation, and it is not a free leave.');
     if (restr.violations) warnings.push(restr.hits[0].message);
     if (worst.daysAboveQuota > 0 && !person.noQuota) warnings.push('Above the 5 free leaves ' + (worst === quota ? 'this month' : 'in the second month') + ' by ' + worst.daysAboveQuota + '.');
+    if (clash.ok) {
+      // A request that is still waiting blocks no one, but the applicant is told: the first one approved holds the slot.
+      var names = {}; ctx.db.rows('People').forEach(function (x) { names[x.id] = x.name; });
+      var waiting = [];
+      ctx.db.rows('LeaveRequests').forEach(function (r) {
+        if (OPEN[r.status] && r.id !== exceptId && r.personId !== person.id) r.dates.forEach(function (d) { waiting.push({ person: names[r.personId], date: d, kind: r.kind }); });
+      });
+      if (waiting.length) {
+        var maybe = Clash.checkRequest({ person: person.name, dates: dates, extremeEmergency: !!input.extremeEmergency }, people, approvedAway(ctx, exceptId).concat(waiting), rules(ctx));
+        if (!maybe.ok) warnings.push('Possible clash: ' + maybe.blocks.map(function (b) { return (b.who || []).join(' and '); }).filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(', ') +
+          ' has a request waiting for the same day. The first one approved holds the slot.');
+      }
+    }
     if (clash.extremeEmergencyPossible) warnings.push('Only possible as an extreme emergency, with Aakash’s approval.');
 
     return {

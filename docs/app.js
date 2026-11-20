@@ -296,7 +296,8 @@
       cards.push(h('div', { class: 'card' }, [h('h2', {}, 'Leaves'), h('div', { class: 'row' }, [h('span', {}, 'Used'), h('span', { class: 'big' }, L.total + ' / ' + L.free)]),
         h('div', { class: 'bar' + (L.total > L.free ? ' over' : '') }, h('span', { style: 'width:' + Math.min(100, L.total / L.free * 100) + '%' })),
         h('p', { class: 'muted' }, 'Roster Sundays ' + L.rosterSundays + ' · Leaves taken ' + L.taken + ' · Left ' + L.left),
-        h('p', { class: 'muted' }, 'Emergencies ' + L.emergencies + ' of ' + L.emergenciesAllowed + (L.emergencies >= L.emergenciesAllowed ? ' · the next emergency is a violation' : ''))]));
+        h('p', { class: 'muted' }, 'Emergencies ' + L.emergencies + ' of ' + L.emergenciesAllowed + (L.emergencies >= L.emergenciesAllowed ? ' · the next emergency is a violation' : '')),
+        L.undecided && L.undecided.length ? h('p', { class: 'muted' }, 'Counted, not decided yet: ' + L.undecided.map(niceDate).join(', ') + ' (away, and the request is still waiting)') : null]));
       cards.push(h('div', { class: 'card' }, [h('h2', {}, '2-hour bank'), h('div', { class: 'row' }, [h('span', {}, 'Left'), h('span', { class: 'big' }, B.left + ' min')]),
         h('div', { class: 'bar' + (B.beyond ? ' over' : '') }, h('span', { style: 'width:' + Math.min(100, B.used / B.minutes * 100) + '%' })),
         h('p', { class: 'muted' }, 'Used ' + B.used + ' of ' + B.minutes + ' min' + (B.beyond ? ' · ' + B.beyond + ' min beyond the bank' : '') + ' · Not-informed passes ' + B.passesUsed + ' of ' + B.passes),
@@ -307,6 +308,7 @@
       var lad = m.ladder;
       cards.push(h('div', { class: 'card' }, [h('h2', {}, 'Violations'), h('div', { class: 'row' }, [h('span', {}, 'This month'), h('span', { class: 'big' }, String(lad.violations))]),
         h('p', { class: 'muted' }, lad.violations === 0 ? 'None. 1st violation is a record only.' : lad.notice ? 'Notice stage. Varun decides.' : lad.bonusLost ? 'Rs ' + lad.bonusAmount + ' discipline bonus and target allowance would be lost. 1 more = notice.' : 'Record only. 1 more violation = discipline bonus and target allowance would be lost.'),
+        m.last3 ? h('p', { class: 'muted' }, 'Last 3 months: ' + m.last3.map(function (x) { return MON[+x.month.slice(5) - 1] + ' ' + x.violations; }).join(' · ')) : null,
         m.violations.length ? h('ul', { class: 'list' }, m.violations.map(function (v) {
           var li = h('li', {}, niceDate(v.date) + ': ' + (RULE_TEXT[v.rule] || v.rule.replace('manual:', 'Recorded by Aakash: ')));
           if (v.disputeState) li.appendChild(h('div', { class: 'muted' }, 'Dispute: ' + v.disputeState));
@@ -339,6 +341,9 @@
           h('p', {}, niceDates(r.dates) + (r.kind === 'half' ? ' · half day ' + r.halfStart : '') + ' · ' + r.type),
           h('p', { class: 'muted' }, r.reasonCode + ': ' + r.reasonText),
           r.route === 'special' ? h('p', { class: 'muted' }, 'Aakash: ' + (r.approvals.aakash || 'waiting') + ' · Varun: ' + (r.approvals.varun || 'waiting')) : null,
+          r.context && r.context.ruleResult.length ? h('p', { class: 'muted' }, 'Why it needs you: ' + r.context.ruleResult.join(' ')) : null,
+          r.context ? h('p', { class: 'muted' }, 'Also away: ' + (r.context.awayToo.length ? r.context.awayToo.map(function (x) { return x.name + ' (' + niceDate(x.date) + ', ' + x.why + ')'; }).join(', ') : 'nobody')) : null,
+          r.context && r.context.month ? h('p', { class: 'muted' }, 'Month so far: ' + r.context.month.leaves + ' of ' + r.context.month.free + ' leaves · ' + r.context.month.emergencies + ' emergencies · bank ' + r.context.month.bankLeft + ' min left · ' + r.context.month.violations + ' violations') : null,
           button('Open ' + r.name + '’s month', 'small', function () { state.tab = 'month'; drawTabs(); VIEWS.month(r.personId); }),
           decide('Approve', function (w) { return run(api('decideLeave', { id: r.id, approve: true, reason: w })).then(function (x) { toast(x.status); }); },
             function (w) { return run(api('decideLeave', { id: r.id, approve: false, reason: w }), 'Rejected.'); })]));

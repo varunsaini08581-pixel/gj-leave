@@ -60,8 +60,9 @@ test('edit: re-runs every check; an edit into a clash is refused; an edit can go
   assert.equal(r.status, 'Approved');
   assert.match(code(() => Admin.editLeave(c, neha, r.id, leave(['2026-11-19']))), /Not allowed: Vikas is off/);
   assert.match(code(() => Admin.editLeave(c, s.actor('Harsh'), r.id, leave(['2026-11-20']))), /FORBIDDEN/);
-  // Same date is allowed (the request does not clash with itself); a short-notice date goes to Aakash.
-  assert.equal(Admin.editLeave(c, neha, r.id, leave(['2026-11-18'], { reasonText: 'Bank and LIC work' })).status, 'Approved');
+  // Same date is allowed (the request does not clash with itself). Handoff Part 6: an edit after
+  // approval goes back to pending, so even this small edit waits for Aakash again.
+  assert.equal(Admin.editLeave(c, neha, r.id, leave(['2026-11-18'], { reasonText: 'Bank and LIC work' })).status, 'Pending with Aakash');
   assert.equal(Admin.editLeave(c, neha, r.id, leave(['2026-11-11'])).status, 'Pending with Aakash');
   const row = s.db.rows('LeaveRequests').find(x => x.id === r.id);
   assert.deepEqual(row.dates, ['2026-11-11']);
@@ -185,7 +186,11 @@ test('month lock: only after the month ends; the locked result never changes; co
   Att.checkIn(s.ctx('2026-10-12', '10:55'), s.actor('Harsh')); // 15 counted, not informed
   assert.match(code(() => Views.lockMonth(s.ctx('2026-10-31', '21:00'), aakash, '2026-10')), /only after it has ended/);
   assert.equal(Views.monthReport(s.ctx('2026-11-01', '10:00'), aakash, '2026-10').locked, false);
-  Views.lockMonth(s.ctx('2026-11-01', '10:00'), aakash, '2026-10');
+  // Aakash AND Varun lock it: the first confirmation does not lock yet.
+  assert.deepEqual(Views.lockMonth(s.ctx('2026-11-01', '10:00'), aakash, '2026-10').waitingFor, ['Varun']);
+  assert.equal(Views.monthReport(s.ctx('2026-11-01', '10:00'), aakash, '2026-10').locked, false);
+  assert.match(code(() => Views.lockMonth(s.ctx('2026-11-01', '10:00'), aakash, '2026-10')), /already confirmed/);
+  assert.equal(Views.lockMonth(s.ctx('2026-11-01', '10:00'), s.actor('Varun'), '2026-10').locked, true);
   assert.match(code(() => Views.lockMonth(s.ctx('2026-11-01', '10:01'), aakash, '2026-10')), /already locked/);
   s.db.insert('DayMinutes', { id: 'late-added', personId: 'harsh', date: '2026-10-13', kind: 'late', minutes: 60, informed: true, statedMinutes: '', source: 't' });
   const rep = Views.monthReport(s.ctx('2026-11-02', '10:00'), aakash, '2026-10');

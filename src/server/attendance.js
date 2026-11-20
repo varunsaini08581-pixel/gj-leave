@@ -494,6 +494,14 @@
       bank: { minutes: mm.run.bankMinutes, used: mm.run.bankUsed, left: mm.run.bankLeft, beyond: mm.run.beyondBankMinutes,
         passesUsed: mm.run.passesUsed, passes: Minutes.DEFAULTS.freePasses,
         days: mm.events.map(function (m, i) { var l = mm.run.lines[i]; return { date: m.date, kind: m.kind, minutes: m.minutes, counted: l.counted, fromBank: l.fromBank, informed: m.informed, notes: l.notes || [] }; }) },
+      // The record of the last 3 months (this month and the two before it) stays in view.
+      last3: [2, 1, 0].map(function (back) {
+        var y = +monthKey.slice(0, 4), mo = +monthKey.slice(5, 7) - back;
+        while (mo < 1) { mo += 12; y -= 1; }
+        var key = y + '-' + (mo < 10 ? '0' + mo : mo);
+        var n = ctx.db.rows('Violations').filter(function (v) { return v.personId === personId && Cal.monthKey(v.date) === key && v.disputeState !== 'removed'; }).length;
+        return { month: key, violations: n, stage: Minutes.ladder(n).notice ? 'notice' : n >= 2 ? 'bonus and allowance' : n === 1 ? 'record only' : 'none' };
+      }),
       violations: violations.map(function (v) { return { id: v.id, date: v.date, rule: v.rule, source: v.source, disputeState: v.disputeState, createdAt: v.createdAt }; }),
       ladder: ladder,
       wouldBeDeducted: salary ? { lines: lines, total: quota.wouldBeDeducted + mm.run.wouldBeDeducted,

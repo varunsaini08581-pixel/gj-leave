@@ -27,7 +27,7 @@
     var role = state.me.role, items = [['Today at GJ', 'gj'], ['Notifications', 'notes']];
     if (role !== 'staff') items = items.concat([['Record a violation / incident', 'incident'], ['Enter leave for a staff member', 'enter'], ['Enter a check-in (phone or camera problem)', 'manualin'], ['Enter a forgotten check-out', 'manualout'], ['Calendar', 'calendar'],
       ['Month report', 'report'], ['Restrictions (blackout dates)', 'restrictions'], ['Set shop location', 'shop']]);
-    if (role === 'owner') items = items.concat([['Disputes', 'disputes'], ['Override a rule (leave)', 'override'], ['People, duty times and pay', 'people'], ['Phones', 'phones'], ['Clash rules', 'rules'], ['Grace table', 'grace']]);
+    if (role === 'owner') items = items.concat([['Disputes', 'disputes'], ['Override a rule (leave)', 'override'], ['People, duty times and pay', 'people'], ['Phones', 'phones'], ['Clash rules', 'rules'], ['Shop-closed days', 'closed'], ['Grace table', 'grace']]);
     return h('div', { class: 'card' }, [h('h2', {}, 'Menu'), h('ul', { class: 'list' }, items.map(function (it) {
       return h('li', {}, button(it[0], 'small', function () { open(it[1]); }));
     }))]);
@@ -106,6 +106,24 @@
     }).catch(function () {});
   };
 
+  // ---------- shop-closed days (owner) ----------
+  V.closed = function () {
+    run(api('getSettings')).then(function (s) {
+      var list = []; try { list = JSON.parse(s.settings.closedDays || '[]') || []; } catch (e) { list = []; }
+      list.sort();
+      var day = h('input', { type: 'date' });
+      function save(next) { return run(api('setSetting', { key: 'closedDays', value: next }), 'Saved.').then(V.closed); }
+      show([back(), h('h1', {}, 'Shop-closed days'), h('p', { class: 'sub' }, 'Days the whole shop is closed (festival, shutdown). Nobody is marked absent, and a leave on such a day uses no quota, also when the day is added later.'),
+        h('div', { class: 'card' }, [field('Add a closed day', day), h('div', { class: 'btns' }, button('Add', 'primary', function () {
+          if (!day.value) { A.toast('Pick a date.'); return Promise.resolve(); }
+          return save(list.indexOf(day.value) === -1 ? list.concat([day.value]) : list);
+        }))]),
+        h('div', { class: 'card' }, list.length ? h('ul', { class: 'list' }, list.map(function (d) {
+          return h('li', {}, h('div', { class: 'row' }, [h('strong', {}, A.niceDate(d)), button('Remove', 'small', function () { return save(list.filter(function (x) { return x !== d; })); })]));
+        })) : h('p', { class: 'muted' }, 'No closed days.'))]);
+    }).catch(function () {});
+  };
+
   // ---------- phones (owner) ----------
   V.phones = function () {
     run(api('devices')).then(function (list) {
@@ -175,8 +193,12 @@
         cards.push(h('div', { class: 'card' }, [h('h2', {}, 'Corrections'), r.corrections.length ? h('ul', { class: 'list' }, r.corrections.map(function (c) { return h('li', {}, c.name + ': ' + c.note + ' (' + c.by + ')'); })) : h('p', { class: 'muted' }, 'None.'),
           who, h('div', { style: 'height:8px' }), note, h('div', { class: 'btns' }, button('Add correction', '', function () { return run(api('addCorrection', { month: m, personId: who.value, note: note.value }), 'Added.').then(function () { V.report(m); }); }))]));
       } else if (m < month()) {
-        cards.push(h('div', { class: 'card' }, [h('p', {}, 'This month has ended. Locking freezes the result; later changes become logged corrections.'),
-          button('Lock ' + monthName(m), 'primary', function () { return run(api('lockMonth', { month: m }), 'Locked.').then(function () { V.report(m); }); })]));
+        var done = r.lockConfirmedBy || [];
+        cards.push(h('div', { class: 'card' }, [h('p', {}, 'This month has ended. Aakash and Varun both confirm the report; then it is locked. Locking freezes the result; later changes become logged corrections.'),
+          done.length ? h('p', { class: 'muted' }, 'Confirmed by ' + done.join(', ') + '. Waiting for the other approver.') : null,
+          button((done.length ? 'Confirm and lock ' : 'Confirm ') + monthName(m), 'primary', function () {
+            return run(api('lockMonth', { month: m })).then(function (x) { A.toast(x.locked ? 'Locked.' : 'Confirmed. Waiting for ' + x.waitingFor.join(' / ') + '.'); V.report(m); });
+          })]));
       }
       cards.push(h('p', { class: 'muted' }, 'Estimate as per company rules. Final salary is decided by management.'));
       show(cards);

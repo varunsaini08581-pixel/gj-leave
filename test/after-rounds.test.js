@@ -69,3 +69,47 @@ test('PIN lock: each lock in a row is longer; the person’s own approved phone 
   assert.equal(code(() => Core.login(at(t0 + 16 * 60000 + 20 * 60000), 'neha', '1111')), 'LOCKED');
   assert.equal(Core.login(at(t0 + 16 * 60000 + 61 * 60000), 'neha', '1111').deviceStatus, 'pending');
 });
+
+test('possible clash: a request that is still waiting blocks no one, but the applicant is told', () => {
+  const s = seed();
+  const a = Core.submitLeave(s.ctx('2026-11-24', '12:00'), s.actor('Bhawna'), leave(['2026-11-25']));
+  assert.equal(a.status, 'Pending with Aakash');
+  const ev = Core.previewLeave(s.ctx('2026-11-20', '10:00'), s.actor('Pooja'), leave(['2026-11-25']));
+  assert.notEqual(ev.decision, 'blocked');
+  assert.match(ev.warnings.join(' '), /Possible clash: Bhawna has a request waiting/);
+  assert.doesNotMatch(ev.warnings.join(' '), /Called in the morning/); // never the other person's reason
+});
+
+test('an edit after approval goes back to Aakash, even when every auto condition still holds (handoff Part 6)', () => {
+  const Admin = require('../src/server/admin.js');
+  const s = seed(); const c = s.ctx('2026-11-10', '10:00'); const neha = s.actor('Neha');
+  const r = Core.submitLeave(c, neha, leave(['2026-11-25'], { reasonCode: 'Personal work' }));
+  assert.equal(r.status, 'Approved');
+  const e = Admin.editLeave(s.ctx('2026-11-11', '10:00'), neha, r.id, leave(['2026-11-26'], { reasonCode: 'Personal work' }));
+  assert.equal(e.status, 'Pending with Aakash');
+  assert.deepEqual(s.db.rows('LeaveRequests')[0].dates, ['2026-11-26']);
+});
+
+test('my month keeps the last 3 months in view; a new month starts at zero', () => {
+  const s = seed();
+  Att.checkIn(s.ctx('2026-09-10', '11:30'), s.actor('Harsh'));   // 60 min late, not informed = violation in September
+  Att.checkIn(s.ctx('2026-10-12', '11:30'), s.actor('Harsh'));   // and one in October
+  const m = Att.myMonth(s.ctx('2026-11-05', '10:00'), 'harsh', '2026-11');
+  assert.deepEqual(m.last3.map(x => [x.month, x.violations]), [['2026-09', 1], ['2026-10', 1], ['2026-11', 0]]);
+  assert.equal(m.ladder.violations, 0);
+  assert.equal(m.bank.used, 0);
+  const jan = Att.myMonth(s.ctx('2027-01-05', '10:00'), 'harsh', '2027-01');
+  assert.deepEqual(jan.last3.map(x => x.month), ['2026-11', '2026-12', '2027-01']);
+});
+
+test('pending card: rule result, who else is away, the month so far; never salary', () => {
+  const Views = require('../src/server/views.js');
+  const s = seed();
+  Core.submitLeave(s.ctx('2026-11-10', '10:00'), s.actor('Vikas'), leave(['2026-11-25'], { reasonCode: 'Personal work' }));
+  const r = Core.submitLeave(s.ctx('2026-11-24', '12:00'), s.actor('Bhawna'), leave(['2026-11-25']));
+  const cx = Views.pendingContext(s.ctx('2026-11-24', '12:05'), s.db.rows('LeaveRequests').find(x => x.id === r.id));
+  assert.match(cx.ruleResult.join(' '), /Emergency leave/);
+  assert.deepEqual(cx.awayToo.map(x => x.name), ['Vikas']);
+  assert.equal(cx.month.free, 5);
+  assert.doesNotMatch(JSON.stringify(cx), /salary|17000/i);
+});

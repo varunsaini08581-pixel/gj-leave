@@ -76,8 +76,26 @@
     }).map(function (r) { return { from: r.from, to: r.to, note: r.note, rule: r.rule }; });
   }
 
+  /** What the approver needs on a pending card: the rule result, who else is away, the person's month so far. */
+  function pendingContext(ctx, r) {
+    var p = H.find(ctx, 'People', r.personId), out = { ruleResult: [], awayToo: [], month: null };
+    if (!p) return out;
+    try {
+      var ev = H.evaluate(ctx, p, { kind: r.kind, dates: r.dates, halfStart: r.halfStart, reasonCode: r.reasonCode, reasonText: r.reasonText || '-', extremeEmergency: r.extremeEmergency }, r.id, { at: r.submittedAt });
+      out.ruleResult = (ev.reasons || []).concat(ev.warnings || []);
+    } catch (e) { out.ruleResult = []; }
+    var map = H.peopleMap(ctx), away = H.approvedAway(ctx, r.id), seen = {};
+    r.dates.forEach(function (d) {
+      var m = Clash.awayOn(d, map, away);
+      Object.keys(m).forEach(function (name) { if (name !== p.name && !seen[name + d]) { seen[name + d] = 1; out.awayToo.push({ name: name, date: d, why: m[name] === 'roster' ? 'roster Sunday' : 'away' }); } });
+    });
+    var mm = Att.myMonth(ctx, p.id, Cal.monthKey(r.dates[0]));
+    out.month = { leaves: mm.leaves.total, free: mm.leaves.free, emergencies: mm.leaves.emergencies, bankLeft: mm.bank.left, violations: mm.ladder.violations };
+    return out;
+  }
+
   function lockedMonths(ctx) {
-    var m = {}; ctx.db.rows('MonthSheet').forEach(function (r) { if (r.personId !== 'correction') m[r.month] = true; });
+    var m = {}; ctx.db.rows('MonthSheet').forEach(function (r) { if (r.personId !== 'correction' && r.personId !== 'lock-ack') m[r.month] = true; });
     return m;
   }
 
@@ -85,12 +103,13 @@
   function monthReport(ctx, actor, monthKey) {
     boss(actor);
     var locked = ctx.db.rows('MonthSheet').filter(function (r) { return r.month === monthKey; });
-    var rows = locked.filter(function (r) { return r.personId !== 'correction'; });
+    var acks = locked.filter(function (r) { return r.personId === 'lock-ack'; }).map(function (r) { return r.result.by; });
+    var rows = locked.filter(function (r) { return r.personId !== 'correction' && r.personId !== 'lock-ack'; });
     var overrides = ctx.db.rows('LeaveRequests').filter(function (r) { return r.override && Cal.monthKey(r.dates[0]) === monthKey; })
       .map(function (r) { return { personId: r.personId, dates: r.dates, reason: r.override }; });
     if (rows.length) return { month: monthKey, locked: true, lockedBy: rows[0].lockedBy, lockedAt: rows[0].lockedAt, people: rows.map(function (r) { return r.result; }),
       corrections: locked.filter(function (r) { return r.personId === 'correction'; }).map(function (r) { return r.result; }), overrides: overrides };
-    return { month: monthKey, locked: false, people: staff(ctx).map(function (p) { return Att.myMonth(ctx, p.id, monthKey); }), corrections: [], overrides: overrides };
+    return { month: monthKey, locked: false, lockConfirmedBy: acks, people: staff(ctx).map(function (p) { return Att.myMonth(ctx, p.id, monthKey); }), corrections: [], overrides: overrides };
   }
 
   /** Lock a finished month. After the lock nothing in it is recalculated; corrections are new logged entries. */
@@ -99,6 +118,16 @@
       boss(actor);
       if (monthKey >= Cal.monthKey(H.today(ctx))) H.fail('BLOCKED', 'A month can be locked only after it has ended.');
       if (lockedMonths(ctx)[monthKey]) H.fail('BLOCKED', 'This month is already locked.');
+      // Handoff 3.11: Aakash AND Varun lock the month. The first one confirms; the lock happens when the other one confirms too.
+      var acks = ctx.db.rows('MonthSheet').filter(function (r) { return r.month === monthKey && r.personId === 'lock-ack'; });
+      var otherRole = actor.role === 'owner' ? 'manager' : 'owner', others = H.byRole(ctx, otherRole);
+      if (acks.some(function (a) { return a.lockedBy === actor.id; })) H.fail('BLOCKED', 'You have already confirmed. Waiting for ' + others.map(function (o) { return o.name; }).join(' / ') + '.');
+      if (others.length && !acks.length) {
+        ctx.db.insert('MonthSheet', { id: ctx.env.randomId(), month: monthKey, personId: 'lock-ack', result: { by: actor.name, at: ctx.now }, lockedBy: actor.id, lockedAt: ctx.now });
+        H.audit(ctx, actor.id, 'month.lock-confirm', monthKey);
+        others.forEach(function (o) { H.notify(ctx, o.id, 'month', 'Month report ready to lock: ' + monthKey, actor.name + ' has confirmed it. Check the report and lock it.', monthKey); });
+        return { month: monthKey, locked: false, waitingFor: others.map(function (o) { return o.name; }) };
+      }
       staff(ctx).forEach(function (p) {
         ctx.db.insert('MonthSheet', { id: ctx.env.randomId(), month: monthKey, personId: p.id, result: Att.myMonth(ctx, p.id, monthKey), lockedBy: actor.id, lockedAt: ctx.now });
       });
@@ -122,7 +151,7 @@
   }
 
   var api = { board: board, todayAtGJ: todayAtGJ, calendar: calendar, myRestrictions: myRestrictions, monthReport: monthReport, lockMonth: lockMonth,
-    addCorrection: addCorrection, lockedMonths: lockedMonths };
+    addCorrection: addCorrection, lockedMonths: lockedMonths, pendingContext: pendingContext };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJViews = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
