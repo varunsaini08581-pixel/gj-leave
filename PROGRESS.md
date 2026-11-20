@@ -71,6 +71,16 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Folder is `docs/` (not `web/`) because GitHub Pages serves only the root or `/docs` from a branch.
 - Tests: 72 of 72 pass.
 
+### 20 Nov 2026, 17:00 - first real deploy (TEST)
+- Owner corrections: (1) late/early requests MUST be approved by Aakash (staff can send; Aakash approves) - NOT YET CODED, currently no approval; asked the owner what happens if Aakash has not decided before the person arrives (proposal: approved later = informed, rejected = not informed). (2) Left before the stated early time = those minutes not informed: confirmed. (3) More than 2 hours away = half day in quota only: confirmed; told him the uninformed-over-30 violation still applies on such a day.
+- Owner: if the Fable limit runs out, continue on Opus 5.5; wants safety wake-ups every 20-30 min. Told him I cannot switch the model myself. Safety wake-ups scheduled and re-armed by each run.
+- Test Sheet "GJ Leave - TEST" created (id 1ve6Piese3kmJ7VPx4q4MIjeyKvMXkEV9T9xfc9bO1yA). Bound Apps Script project created through the owner's Chrome, bundle loaded from GitHub raw, `setupOrUpgrade` run on the real Sheet (all tabs created), owner granted permissions himself.
+- Web app deployed (version 1, execute as owner, access Anyone). URL is in `docs/config.js`.
+- Real-server check from the browser: names, owner bootstrap login, staff login pending, owner approves phone, preview, submit (auto-approved), stored as text in the Sheet. About 2.5 s per call. Test rows cleared afterwards.
+- Test roster seeded in People (every PIN 1234) and sample PayInfo (17,000 from the handoff example). TEST DATA ONLY.
+- GitHub Pages enabled (main, /docs): https://varunsaini08581-pixel.github.io/gj-leave/  Demo mode: add ?demo=1
+- Redeploying after code changes: Apps Script > Deploy > Manage deployments > edit > New version (same URL). New Google permission is not needed unless a new service is added.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
@@ -85,7 +95,6 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 11. Shop-closed days are read from Settings `closedDays`; no screen for it yet.
 
 ## Next
-- NEEDS OWNER'S CHROME: create test Sheet "GJ Leave - TEST", Extensions > Apps Script, paste `apps-script/Code.js`, run `setupOrUpgrade`, deploy as web app, Google "Allow".
-- Owner: enable GitHub Pages (Settings > Pages > Deploy from a branch > main > /docs) so the demo opens on his phone.
+- Late/early approval by Aakash (owner correction), then redeploy a new version.
 - Screens still missing: calendar, month report, settings, restrictions, Today at GJ, camera check-in, disputes, manual violations.
 - Edit-after-approval (back to pending, re-check), manual violations by Aakash with grace table, disputes (24 h), settings API, month lock, 12-person month simulation, email alerts + 2-hour reminder trigger.
