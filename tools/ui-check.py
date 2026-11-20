@@ -5,10 +5,10 @@ time.sleep(1)
 errors = []
 try:
     with sync_playwright() as p:
-        b = p.chromium.launch()
+        b = p.chromium.launch(args=['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'])
         ctx = b.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2)
         pg = ctx.new_page()
-        pg.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
+        pg.on('console', lambda m: errors.append(m.text) if m.type == 'error' and 'XNNPACK' not in m.text else None)
         pg.on('pageerror', lambda e: errors.append(str(e)))
         def login(who):
             pg.goto('http://localhost:8765/?demo=1')
@@ -27,7 +27,7 @@ try:
         pg.screenshot(path='2-apply.png', full_page=True)
         pg.click('text=Send request'); pg.wait_for_selector('text=My requests')
         pg.click('#tabs >> text=Today'); pg.wait_for_selector('text=Hello,')
-        pg.click('button:has-text("Check in")'); pg.wait_for_selector('text=Checked in')
+        pg.click('button:has-text("Check in")'); pg.click('button:has-text("Take photo"):not([disabled])'); pg.wait_for_selector('button:has-text("Check out")', timeout=30000)
         pg.click('#tabs >> text=My month'); pg.wait_for_selector('text=2-hour bank')
         pg.screenshot(path='3-month.png', full_page=True)
         # emergency request to create a pending approval

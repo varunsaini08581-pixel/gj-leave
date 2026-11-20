@@ -502,7 +502,7 @@
     ShortRequests: ['id', 'personId', 'date', 'kind', 'time', 'submittedAt', 'status', 'note', 'decidedAt', 'decidedBy', 'decisionReason', 'remindedAt'],
     Outings: ['id', 'personId', 'date', 'reason', 'expectedMinutes', 'requestedAt', 'status', 'approvedAt', 'approvedBy',
       'decisionReason', 'backAt', 'confirmedAt', 'confirmedBy', 'correctedBackAt', 'minutes', 'remindedAt'],
-    Punches: ['id', 'personId', 'date', 'kind', 'at', 'photoId', 'lat', 'lng', 'accuracy', 'distance', 'deviceId', 'flag', 'note'],
+    Punches: ['id', 'personId', 'date', 'kind', 'at', 'photoId', 'lat', 'lng', 'accuracy', 'distance', 'deviceId', 'flag', 'note', 'thumbId', 'dress', 'dressDecision', 'enteredBy'],
     DayMinutes: ['id', 'personId', 'date', 'kind', 'minutes', 'informed', 'statedMinutes', 'source', 'note', 'shortId'],
     Incidents: ['id', 'personId', 'date', 'item', 'note', 'photoId', 'createdBy', 'createdAt', 'result', 'countInPeriod', 'grace'],
     Violations: ['id', 'personId', 'date', 'rule', 'source', 'proof', 'note', 'createdBy', 'createdAt', 'disputeState',
@@ -515,7 +515,7 @@
 
   var JSON_COLS = {
     People: ['sundayOff'], Rules: ['members', 'rosterSundayException', 'emergencyIfAllPresent'],
-    Restrictions: ['appliesTo'], LeaveRequests: ['dates', 'approvals', 'history'], MonthSheet: ['result'], Audit: ['detail']
+    Restrictions: ['appliesTo'], LeaveRequests: ['dates', 'approvals', 'history'], Punches: ['dress'], MonthSheet: ['result'], Audit: ['detail']
   };
 
   // Every cell is stored as plain text (so Sheets never turns '2026-11-25' or '09:30' into a date).
@@ -1163,7 +1163,14 @@
       if (day.fullLeave || Cal.isRosterOff(person, date)) flag.push('off-day');
       var punch = { id: ctx.env.randomId(), personId: actor.id, date: date, kind: 'in', at: ctx.now, photoId: a.photoId || '',
         lat: a.lat === undefined ? '' : a.lat, lng: a.lng === undefined ? '' : a.lng, accuracy: a.accuracy === undefined ? '' : a.accuracy,
-        distance: distance, deviceId: actor.deviceId || '', flag: flag.join(','), note: '' };
+        distance: distance, deviceId: actor.deviceId || '', flag: flag.join(','), note: '', thumbId: a.thumbId || '', dress: null, dressDecision: '', enteredBy: '' };
+      // Automatic dress check (Mon-Sat; Sunday casual; exempt people skipped). It only FLAGS to Aakash.
+      if (a.dress && !person.dressExempt && Cal.weekday(date) !== 0) {
+        punch.dress = cleanDress(a.dress);
+        if (dressIssues(punch.dress).length) H.byRole(ctx, 'manager').forEach(function (m) {
+          H.notify(ctx, m.id, 'dress', 'Dress check: ' + person.name, 'Possible issue: ' + dressIssues(punch.dress).join(', ') + '. Confirm or dismiss.', punch.id);
+        });
+      }
       ctx.db.insert('Punches', punch);
 
       var late = nowMin(ctx) - day.start, counted = null;
@@ -1207,6 +1214,51 @@
       }
       H.audit(ctx, actor.id, 'punch.out', punch.id, { early: Math.max(0, early) });
       return { id: punch.id, at: ctx.now, earlyMinutes: Math.max(0, early) };
+    });
+  }
+
+  var DRESS_PARTS = { top: 'top not white', trousers: 'trousers not black', shoes: 'shoes not black', belt: 'belt not seen' };
+  function cleanDress(d) {
+    var out = {};
+    Object.keys(DRESS_PARTS).forEach(function (k) { out[k] = d[k] === 'ok' || d[k] === 'issue' ? d[k] : 'unknown'; });
+    return out;
+  }
+  /** Belt is a weak signal, so it is shown as a hint but never raises a flag on its own. */
+  function dressIssues(d) {
+    return ['top', 'trousers', 'shoes'].filter(function (k) { return d && d[k] === 'issue'; }).map(function (k) { return DRESS_PARTS[k]; });
+  }
+
+  /** Aakash confirms (uses the dress grace, then a violation) or dismisses with 1 tap. Never automatic. */
+  function decideDress(ctx, actor, punchId, confirm, recordIncident) {
+    return ctx.env.withLock(function () {
+      boss(actor);
+      var p = H.find(ctx, 'Punches', punchId);
+      if (!p || !p.dress || p.dressDecision || !dressIssues(p.dress).length) H.fail('NOT_FOUND', 'Nothing to decide.');
+      ctx.db.update('Punches', punchId, { dressDecision: confirm ? 'confirmed' : 'dismissed' });
+      H.audit(ctx, actor.id, confirm ? 'dress.confirm' : 'dress.dismiss', punchId);
+      if (!confirm) return { id: punchId, decision: 'dismissed' };
+      return ctx.env.withLock(function () {
+        return Object.assign({ decision: 'confirmed' }, recordIncident(ctx, actor, { personId: p.personId, item: 'dress', date: p.date, note: 'Dress check: ' + dressIssues(p.dress).join(', '), photoId: p.photoId }));
+      });
+    });
+  }
+
+  /** When a phone or camera fails: Aakash enters the check-in, labelled "entered by Aakash", with a reason. */
+  function manualCheckIn(ctx, actor, a) {
+    return ctx.env.withLock(function () {
+      boss(actor);
+      var person = H.find(ctx, 'People', a.personId), date = H.today(ctx);
+      if (!person || person.role !== 'staff') H.fail('NOT_FOUND', 'Choose a staff member.');
+      if (!String(a.reason || '').trim()) H.fail('REASON', 'Write why the person could not check in.');
+      if (!/^\d{2}:\d{2}$/.test(a.time || '')) H.fail('BLOCKED', 'Enter the exact arrival time.');
+      if (punchesToday(ctx, a.personId, date, 'in').length) H.fail('BLOCKED', 'Already checked in today.');
+      var at = Core.toMs(date, a.time);
+      if (at > ctx.now) H.fail('BLOCKED', 'The time cannot be in the future.');
+      var asThen = { db: ctx.db, env: ctx.env, now: at };
+      var r = checkIn(asThen, { id: person.id, name: person.name, role: 'staff', deviceId: '' }, {});
+      ctx.db.update('Punches', r.id, { enteredBy: actor.id, note: 'Entered by ' + actor.name + ': ' + String(a.reason).trim(), flag: 'entered-by-manager' });
+      H.audit(ctx, actor.id, 'punch.manual', r.id, { personId: a.personId, time: a.time, reason: a.reason });
+      return { id: r.id, lateMinutes: r.lateMinutes };
     });
   }
 
@@ -1445,7 +1497,7 @@
   }
 
   var api = { requestShort: requestShort, decideShort: decideShort, checkIn: checkIn, checkOut: checkOut, goingOut: goingOut, decideOuting: decideOuting,
-    imBack: imBack, confirmBack: confirmBack, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
+    imBack: imBack, confirmBack: confirmBack, decideDress: decideDress, manualCheckIn: manualCheckIn, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
     syncViolations: syncViolations };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJAttendance = api;
@@ -1777,7 +1829,7 @@
     var date = H.today(ctx), names = {};
     ctx.db.rows('People').forEach(function (p) { names[p.id] = p.name; });
     return ctx.db.rows('Punches').filter(function (x) { return x.date === date && x.kind === 'in'; })
-      .map(function (x) { return { name: names[x.personId], at: x.at, photoId: x.photoId }; });
+      .map(function (x) { return { name: names[x.personId], at: x.at, photoId: x.thumbId }; });
   }
 
   /** Month grid by group, with roster Sundays, restrictions and clash-risk days. */
@@ -2044,7 +2096,10 @@
   var PRIVATE = {
     me: function (ctx, actor) {
       var p = ctx.db.rows('People').filter(function (x) { return x.id === actor.id; })[0];
-      return { id: p.id, name: p.name, role: p.role, group: p.group, dutyStart: p.dutyStart, dutyEnd: p.dutyEnd, reasons: Core.REASONS };
+      var shop = ctx.db.rows('Settings').filter(function (x) { return x.key === 'shopPoint'; })[0], point = null;
+      try { if (shop) { var sp = JSON.parse(shop.value); point = { lat: sp.lat, lng: sp.lng }; } } catch (e) { point = null; }
+      return { id: p.id, name: p.name, role: p.role, group: p.group, dutyStart: p.dutyStart, dutyEnd: p.dutyEnd, reasons: Core.REASONS,
+        dressExempt: !!p.dressExempt, deviceShort: String(actor.deviceId || '').slice(-4), shopPoint: point, serverTime: ctx.now };
     },
     previewLeave: function (ctx, actor, a) { return Core.previewLeave(ctx, actor, a); },
     submitLeave: function (ctx, actor, a) { return Core.submitLeave(ctx, actor, a); },
@@ -2061,7 +2116,23 @@
     },
     requestShort: function (ctx, actor, a) { return Att.requestShort(ctx, actor, a); },
     decideShort: function (ctx, actor, a) { return Att.decideShort(ctx, actor, a.id, !!a.approve, a.reason); },
-    checkIn: function (ctx, actor, a) { return Att.checkIn(ctx, actor, a); },
+    checkIn: function (ctx, actor, a) {
+      // The check-in photo is taken inside the app (back camera, landscape) and is required.
+      if (!a.photo || !a.thumb) throw err('BLOCKED', 'Take the check-in photo first.');
+      if (String(a.photo).length > 900000 || String(a.thumb).length > 120000) throw err('BLOCKED', 'The photo is too large. Please try again.');
+      var stamp = Core._.today(ctx) + '_' + actor.id + '_' + ctx.now;
+      var args = { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, photoId: ctx.env.savePhoto(stamp + '.jpg', a.photo), thumbId: ctx.env.savePhoto(stamp + '_thumb.jpg', a.thumb) };
+      return Att.checkIn(ctx, actor, args);
+    },
+    photo: function (ctx, actor, a) {
+      var p = ctx.db.rows('Punches').filter(function (x) { return x.photoId === a.id || x.thumbId === a.id; })[0];
+      if (!p) throw err('NOT_FOUND', 'No such photo.');
+      var isThumbToday = p.thumbId === a.id && p.date === Core._.today(ctx);   // "Today at GJ": everyone
+      if (!(isThumbToday || actor.role !== 'staff' || p.personId === actor.id)) throw err('FORBIDDEN', 'You cannot see this photo.');
+      return { data: ctx.env.readPhoto(a.id) };
+    },
+    decideDress: function (ctx, actor, a) { return Att.decideDress(ctx, actor, a.id, !!a.confirm, Admin.recordIncident); },
+    manualCheckIn: function (ctx, actor, a) { return Att.manualCheckIn(ctx, actor, a); },
     checkOut: function (ctx, actor) { return Att.checkOut(ctx, actor); },
     goingOut: function (ctx, actor, a) { return Att.goingOut(ctx, actor, a); },
     decideOuting: function (ctx, actor, a) { return Att.decideOuting(ctx, actor, a.id, !!a.approve, a.reason); },
@@ -2097,6 +2168,8 @@
         }),
         shorts: ctx.db.rows('ShortRequests').filter(function (q) { return q.status === 'Pending'; })
           .map(function (q) { return { id: q.id, name: names[q.personId], kind: q.kind, date: q.date, time: q.time, submittedAt: q.submittedAt }; }),
+        dress: ctx.db.rows('Punches').filter(function (x) { return x.dress && !x.dressDecision && Att.dressIssues(x.dress).length; })
+          .map(function (x) { return { id: x.id, name: names[x.personId], date: x.date, issues: Att.dressIssues(x.dress), belt: x.dress.belt, photoId: x.photoId }; }),
         devices: []
       };
       if (actor.role === 'owner') out.devices = ctx.db.rows('Devices').filter(function (d) { return d.status === 'pending'; })
@@ -2206,6 +2279,8 @@ function gjGrid_() {
   };
 }
 
+var gjLockDepth_ = 0;
+
 function gjEnv_() {
   return {
     sha256: function (s) {
@@ -2213,10 +2288,14 @@ function gjEnv_() {
       return bytes.map(function (b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
     },
     randomId: function () { return Utilities.getUuid().replace(/-/g, ''); },
+    savePhoto: function (name, data) { return gjSavePhoto_(name, data); },
+    readPhoto: function (id) { return gjReadPhoto_(id); },
     withLock: function (fn) {
+      if (gjLockDepth_ > 0) return fn(); // already inside the lock in this run
       var lock = LockService.getScriptLock();
       lock.waitLock(25000);
-      try { return fn(); } finally { lock.releaseLock(); }
+      gjLockDepth_ += 1;
+      try { return fn(); } finally { gjLockDepth_ -= 1; lock.releaseLock(); }
     }
   };
 }
@@ -2286,4 +2365,21 @@ function installTriggers() {
   ScriptApp.newTrigger('jobEvening').timeBased().atHour(19).everyDays(1).inTimezone('Asia/Kolkata').create();
   ScriptApp.newTrigger('jobEndOfDay').timeBased().atHour(21).everyDays(1).inTimezone('Asia/Kolkata').create();
   return 'Timers installed.';
+}
+
+// ---------- Photos (private Drive folder; the Sheet keeps only the file id) ----------
+
+function gjPhotoFolder_() {
+  var props = PropertiesService.getScriptProperties(), id = props.getProperty('photoFolderId');
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) { /* folder was removed: make a new one */ } }
+  var folder = DriveApp.createFolder('GJ Leave - check-in photos (private)');
+  props.setProperty('photoFolderId', folder.getId());
+  return folder;
+}
+function gjSavePhoto_(name, base64) {
+  var blob = Utilities.newBlob(Utilities.base64Decode(String(base64).replace(/^data:image\/jpeg;base64,/, '')), 'image/jpeg', name);
+  return gjPhotoFolder_().createFile(blob).getId(); // not shared with anyone
+}
+function gjReadPhoto_(id) {
+  return 'data:image/jpeg;base64,' + Utilities.base64Encode(DriveApp.getFileById(id).getBlob().getBytes());
 }

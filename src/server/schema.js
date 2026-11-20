@@ -19,7 +19,7 @@
     ShortRequests: ['id', 'personId', 'date', 'kind', 'time', 'submittedAt', 'status', 'note', 'decidedAt', 'decidedBy', 'decisionReason', 'remindedAt'],
     Outings: ['id', 'personId', 'date', 'reason', 'expectedMinutes', 'requestedAt', 'status', 'approvedAt', 'approvedBy',
       'decisionReason', 'backAt', 'confirmedAt', 'confirmedBy', 'correctedBackAt', 'minutes', 'remindedAt'],
-    Punches: ['id', 'personId', 'date', 'kind', 'at', 'photoId', 'lat', 'lng', 'accuracy', 'distance', 'deviceId', 'flag', 'note'],
+    Punches: ['id', 'personId', 'date', 'kind', 'at', 'photoId', 'lat', 'lng', 'accuracy', 'distance', 'deviceId', 'flag', 'note', 'thumbId', 'dress', 'dressDecision', 'enteredBy'],
     DayMinutes: ['id', 'personId', 'date', 'kind', 'minutes', 'informed', 'statedMinutes', 'source', 'note', 'shortId'],
     Incidents: ['id', 'personId', 'date', 'item', 'note', 'photoId', 'createdBy', 'createdAt', 'result', 'countInPeriod', 'grace'],
     Violations: ['id', 'personId', 'date', 'rule', 'source', 'proof', 'note', 'createdBy', 'createdAt', 'disputeState',
@@ -32,7 +32,7 @@
 
   var JSON_COLS = {
     People: ['sundayOff'], Rules: ['members', 'rosterSundayException', 'emergencyIfAllPresent'],
-    Restrictions: ['appliesTo'], LeaveRequests: ['dates', 'approvals', 'history'], MonthSheet: ['result'], Audit: ['detail']
+    Restrictions: ['appliesTo'], LeaveRequests: ['dates', 'approvals', 'history'], Punches: ['dress'], MonthSheet: ['result'], Audit: ['detail']
   };
 
   // Every cell is stored as plain text (so Sheets never turns '2026-11-25' or '09:30' into a date).

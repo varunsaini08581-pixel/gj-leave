@@ -30,6 +30,8 @@ function gjGrid_() {
   };
 }
 
+var gjLockDepth_ = 0;
+
 function gjEnv_() {
   return {
     sha256: function (s) {
@@ -37,10 +39,14 @@ function gjEnv_() {
       return bytes.map(function (b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
     },
     randomId: function () { return Utilities.getUuid().replace(/-/g, ''); },
+    savePhoto: function (name, data) { return gjSavePhoto_(name, data); },
+    readPhoto: function (id) { return gjReadPhoto_(id); },
     withLock: function (fn) {
+      if (gjLockDepth_ > 0) return fn(); // already inside the lock in this run
       var lock = LockService.getScriptLock();
       lock.waitLock(25000);
-      try { return fn(); } finally { lock.releaseLock(); }
+      gjLockDepth_ += 1;
+      try { return fn(); } finally { gjLockDepth_ -= 1; lock.releaseLock(); }
     }
   };
 }
@@ -110,4 +116,21 @@ function installTriggers() {
   ScriptApp.newTrigger('jobEvening').timeBased().atHour(19).everyDays(1).inTimezone('Asia/Kolkata').create();
   ScriptApp.newTrigger('jobEndOfDay').timeBased().atHour(21).everyDays(1).inTimezone('Asia/Kolkata').create();
   return 'Timers installed.';
+}
+
+// ---------- Photos (private Drive folder; the Sheet keeps only the file id) ----------
+
+function gjPhotoFolder_() {
+  var props = PropertiesService.getScriptProperties(), id = props.getProperty('photoFolderId');
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) { /* folder was removed: make a new one */ } }
+  var folder = DriveApp.createFolder('GJ Leave - check-in photos (private)');
+  props.setProperty('photoFolderId', folder.getId());
+  return folder;
+}
+function gjSavePhoto_(name, base64) {
+  var blob = Utilities.newBlob(Utilities.base64Decode(String(base64).replace(/^data:image\/jpeg;base64,/, '')), 'image/jpeg', name);
+  return gjPhotoFolder_().createFile(blob).getId(); // not shared with anyone
+}
+function gjReadPhoto_(id) {
+  return 'data:image/jpeg;base64,' + Utilities.base64Encode(DriveApp.getFileById(id).getBlob().getBytes());
 }

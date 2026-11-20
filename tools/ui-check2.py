@@ -6,9 +6,9 @@ srv = subprocess.Popen([sys.executable, '-m', 'http.server', '8766', '--director
 time.sleep(1); errors = []; shots = sys.argv[1] if len(sys.argv) > 1 else None
 try:
     with sync_playwright() as p:
-        b = p.chromium.launch(); ctx = b.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=1, geolocation={'latitude': 29.1492, 'longitude': 75.7217}, permissions=['geolocation'])
+        b = p.chromium.launch(args=['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']); ctx = b.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=1, geolocation={'latitude': 29.1492, 'longitude': 75.7217}, permissions=['geolocation'])
         pg = ctx.new_page(); pg.set_default_timeout(8000)
-        pg.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None); pg.on('pageerror', lambda e: errors.append(str(e)))
+        pg.on('console', lambda m: errors.append(m.text) if m.type == 'error' and 'XNNPACK' not in m.text else None); pg.on('pageerror', lambda e: errors.append(str(e)))
         def login(who):
             pg.select_option('#who', who); pg.fill('#pin', '1234'); pg.click('text=Sign in')
             pg.wait_for_selector('button:has-text("Demo only"), h1:has-text("Hello,")')
@@ -19,7 +19,7 @@ try:
             pg.click('#tabs >> text=More'); pg.click('button:has-text("%s")' % label); pg.wait_for_selector('text=%s' % expect)
             if shots: pg.screenshot(path=os.path.join(shots, label.split(' ')[0].lower() + '.png'), full_page=True)
         pg.goto('http://localhost:8766/?demo=1'); pg.wait_for_selector('#who option', state='attached')
-        login('harsh'); pg.click('button:has-text("Check in")'); pg.wait_for_selector('button:has-text("Check out")')
+        login('harsh'); pg.click('button:has-text("Check in")'); pg.click('button:has-text("Take photo"):not([disabled])'); pg.wait_for_selector('button:has-text("Check out")', timeout=30000)
         pg.fill('input[type=time]', '19:00'); pg.click('button:has-text("I will leave early")'); pg.click('button:has-text("Ask Aakash") >> nth=-1'); pg.wait_for_timeout(700); pg.wait_for_selector('text=Pending with Aakash')
         pg.click('#tabs >> text=More'); pg.click('text=Sign out')
         login('aakash'); pg.wait_for_selector('text=Shop today')
@@ -29,7 +29,7 @@ try:
         menu('Calendar', 'Clash risk'); menu('Month report', 'Live, not locked'); menu('Restrictions', 'New restriction')
         pg.fill('input[type=date] >> nth=0', '2026-12-24'); pg.fill('input[type=date] >> nth=1', '2026-12-26'); pg.fill('input[placeholder^="For example"]', 'Year-end sale'); pg.click('button:has-text("Add restriction")'); pg.wait_for_selector('text=Year-end sale')
         menu('Set shop location', 'Stand inside the shop'); pg.click('button:has-text("Set shop location now")'); pg.wait_for_selector('text=Saved:', timeout=15000)
-        menu('Today at GJ', 'Harsh'); menu('Notifications', 'Notifications')
+        menu('Today at GJ', 'Harsh'); pg.wait_for_selector('img[alt="Check-in photo"][src^="data:image/jpeg"]'); menu('Notifications', 'Notifications')
         menu('Enter leave', 'Enter leave for staff')
         pg.click('#tabs >> text=More'); pg.click('text=Sign out')
         login('harsh'); pg.click('#tabs >> text=My month'); pg.wait_for_selector('text=Recorded by Aakash'); pg.fill('input[placeholder^="Why do you"]', 'I filled it later'); pg.click('button:has-text("Dispute")'); pg.wait_for_selector('text=Dispute: open')

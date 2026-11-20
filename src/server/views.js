@@ -39,7 +39,7 @@
     var date = H.today(ctx), names = {};
     ctx.db.rows('People').forEach(function (p) { names[p.id] = p.name; });
     return ctx.db.rows('Punches').filter(function (x) { return x.date === date && x.kind === 'in'; })
-      .map(function (x) { return { name: names[x.personId], at: x.at, photoId: x.photoId }; });
+      .map(function (x) { return { name: names[x.personId], at: x.at, photoId: x.thumbId }; });
   }
 
   /** Month grid by group, with roster Sundays, restrictions and clash-risk days. */

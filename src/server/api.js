@@ -39,7 +39,10 @@
   var PRIVATE = {
     me: function (ctx, actor) {
       var p = ctx.db.rows('People').filter(function (x) { return x.id === actor.id; })[0];
-      return { id: p.id, name: p.name, role: p.role, group: p.group, dutyStart: p.dutyStart, dutyEnd: p.dutyEnd, reasons: Core.REASONS };
+      var shop = ctx.db.rows('Settings').filter(function (x) { return x.key === 'shopPoint'; })[0], point = null;
+      try { if (shop) { var sp = JSON.parse(shop.value); point = { lat: sp.lat, lng: sp.lng }; } } catch (e) { point = null; }
+      return { id: p.id, name: p.name, role: p.role, group: p.group, dutyStart: p.dutyStart, dutyEnd: p.dutyEnd, reasons: Core.REASONS,
+        dressExempt: !!p.dressExempt, deviceShort: String(actor.deviceId || '').slice(-4), shopPoint: point, serverTime: ctx.now };
     },
     previewLeave: function (ctx, actor, a) { return Core.previewLeave(ctx, actor, a); },
     submitLeave: function (ctx, actor, a) { return Core.submitLeave(ctx, actor, a); },
@@ -56,7 +59,23 @@
     },
     requestShort: function (ctx, actor, a) { return Att.requestShort(ctx, actor, a); },
     decideShort: function (ctx, actor, a) { return Att.decideShort(ctx, actor, a.id, !!a.approve, a.reason); },
-    checkIn: function (ctx, actor, a) { return Att.checkIn(ctx, actor, a); },
+    checkIn: function (ctx, actor, a) {
+      // The check-in photo is taken inside the app (back camera, landscape) and is required.
+      if (!a.photo || !a.thumb) throw err('BLOCKED', 'Take the check-in photo first.');
+      if (String(a.photo).length > 900000 || String(a.thumb).length > 120000) throw err('BLOCKED', 'The photo is too large. Please try again.');
+      var stamp = Core._.today(ctx) + '_' + actor.id + '_' + ctx.now;
+      var args = { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, photoId: ctx.env.savePhoto(stamp + '.jpg', a.photo), thumbId: ctx.env.savePhoto(stamp + '_thumb.jpg', a.thumb) };
+      return Att.checkIn(ctx, actor, args);
+    },
+    photo: function (ctx, actor, a) {
+      var p = ctx.db.rows('Punches').filter(function (x) { return x.photoId === a.id || x.thumbId === a.id; })[0];
+      if (!p) throw err('NOT_FOUND', 'No such photo.');
+      var isThumbToday = p.thumbId === a.id && p.date === Core._.today(ctx);   // "Today at GJ": everyone
+      if (!(isThumbToday || actor.role !== 'staff' || p.personId === actor.id)) throw err('FORBIDDEN', 'You cannot see this photo.');
+      return { data: ctx.env.readPhoto(a.id) };
+    },
+    decideDress: function (ctx, actor, a) { return Att.decideDress(ctx, actor, a.id, !!a.confirm, Admin.recordIncident); },
+    manualCheckIn: function (ctx, actor, a) { return Att.manualCheckIn(ctx, actor, a); },
     checkOut: function (ctx, actor) { return Att.checkOut(ctx, actor); },
     goingOut: function (ctx, actor, a) { return Att.goingOut(ctx, actor, a); },
     decideOuting: function (ctx, actor, a) { return Att.decideOuting(ctx, actor, a.id, !!a.approve, a.reason); },
@@ -92,6 +111,8 @@
         }),
         shorts: ctx.db.rows('ShortRequests').filter(function (q) { return q.status === 'Pending'; })
           .map(function (q) { return { id: q.id, name: names[q.personId], kind: q.kind, date: q.date, time: q.time, submittedAt: q.submittedAt }; }),
+        dress: ctx.db.rows('Punches').filter(function (x) { return x.dress && !x.dressDecision && Att.dressIssues(x.dress).length; })
+          .map(function (x) { return { id: x.id, name: names[x.personId], date: x.date, issues: Att.dressIssues(x.dress), belt: x.dress.belt, photoId: x.photoId }; }),
         devices: []
       };
       if (actor.role === 'owner') out.devices = ctx.db.rows('Devices').filter(function (d) { return d.status === 'pending'; })

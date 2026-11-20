@@ -101,6 +101,16 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - `tools/ui-check2.py`: phone-size run through every management screen in demo mode (3 users, 20+ screens). 0 console errors. `tools/ui-check.py` still passes.
 - Tests: 96 pass.
 
+### 20 Nov 2026, 17:23 IST
+- Check-in photo: `docs/camera.js` opens the BACK camera only (facingMode exact environment; the front camera cannot be offered), accepts LANDSCAPE only (Take photo stays disabled in portrait), no gallery upload, framing guide and person outline, stamp drawn on the photo (name, server date and time, lat/long with accuracy, distance from the shop point, device). Photo about 1280 px wide + a 320 px thumbnail.
+- Server: check-in through the API now REQUIRES the photo; photos go to a private Drive folder (id kept in script properties), the Sheet keeps only file ids; `photo` action serves today's thumbnails to everyone (Today at GJ) and the full photo only to that person, Aakash and Varun; yesterday's thumbnails are no longer public. Size limits enforced.
+- Dress check: `docs/dress.js` (MediaPipe pose model on the phone + colour sampling). Top white (black coat OK), trousers black, shoes black, belt = hint only. Result only flags to Aakash; Confirm uses the dress grace then becomes a violation, Dismiss clears it. Skipped on Sundays and for exempt people. Colour logic tested on synthetic photos; the pose model itself loaded fine in the test browser but is NOT yet verified on real shop photos.
+- Manual check-in by Aakash (phone or camera failed): reason required, labelled entered by Aakash, no photo. ASSUMPTION, not in the handoff.
+- Apps Script lock made safe for nested locked actions.
+- UI checks run with a fake camera: photo is captured, stamped, stored and shown in Today at GJ. 0 console errors.
+- BLOCKED: the new server code is saved in the Apps Script editor but Google asks the owner for one more permission (new code uses Session email + email sending). Dialog left open in his Chrome. Until he allows and a new version is deployed, the live test site talks to server version 1 and the new screens answer 'Unknown action'.
+- Tests: 105 pass.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.

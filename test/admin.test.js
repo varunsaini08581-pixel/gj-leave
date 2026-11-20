@@ -196,3 +196,34 @@ test('month lock: only after the month ends; the locked result never changes; co
   assert.equal(Views.monthReport(s.ctx('2026-11-02', '12:00'), aakash, '2026-10').corrections.length, 1);
   assert.match(code(() => Views.monthReport(s.ctx('2026-11-02', '12:00'), s.actor('Neha'), '2026-10')), /FORBIDDEN/);
 });
+
+test('dress check only flags: Aakash confirms (grace first, then violation) or dismisses; belt alone never flags', () => {
+  const s = seed(); const aakash = s.actor('Aakash');
+  const days = ['2026-11-23', '2026-11-24', '2026-11-25'];
+  const ids = days.map(d => Att.checkIn(s.ctx(d, '10:30'), s.actor('Harsh'), { dress: { top: 'ok', trousers: 'ok', shoes: 'issue', belt: 'unknown' } }).id);
+  assert.equal(s.db.rows('Violations').length, 0);                       // never a violation by itself
+  assert.equal(s.db.rows('Notifications').filter(n => n.kind === 'dress' && n.to === 'aakash').length, 3);
+  assert.match(code(() => Att.decideDress(s.ctx(days[0], '11:00'), s.actor('Neha'), ids[0], true, Admin.recordIncident)), /FORBIDDEN/);
+  assert.equal(Att.decideDress(s.ctx(days[0], '11:00'), aakash, ids[0], true, Admin.recordIncident).result, 'grace');       // 1 a month
+  assert.equal(Att.decideDress(s.ctx(days[1], '11:00'), aakash, ids[1], false, Admin.recordIncident).decision, 'dismissed');
+  assert.equal(Att.decideDress(s.ctx(days[2], '11:00'), aakash, ids[2], true, Admin.recordIncident).result, 'violation');
+  assert.match(code(() => Att.decideDress(s.ctx(days[2], '11:05'), aakash, ids[2], true, Admin.recordIncident)), /NOT_FOUND/);
+  // Belt only, Sunday, and an exempt person: no flag at all.
+  Att.checkIn(s.ctx('2026-11-26', '09:30'), s.actor('Neha'), { dress: { top: 'ok', trousers: 'ok', shoes: 'ok', belt: 'issue' } });
+  Att.checkIn(s.ctx('2026-11-29', '09:30'), s.actor('Neha'), { dress: { top: 'issue', trousers: 'issue', shoes: 'issue', belt: 'issue' } }); // Sunday casual
+  Att.checkIn(s.ctx('2026-11-26', '09:30'), s.actor('Anita'), { dress: { top: 'issue', trousers: 'issue', shoes: 'issue', belt: 'issue' } });
+  assert.equal(s.db.rows('Notifications').filter(n => n.kind === 'dress').length, 3);
+});
+
+test('manual check-in by Aakash: labelled, needs a reason, late minutes counted from the stated time', () => {
+  const s = seed(); const aakash = s.actor('Aakash'); const c = s.ctx(D, '12:00');
+  assert.match(code(() => Att.manualCheckIn(c, s.actor('Neha'), { personId: 'harsh', time: '10:30', reason: 'x' })), /FORBIDDEN/);
+  assert.match(code(() => Att.manualCheckIn(c, aakash, { personId: 'harsh', time: '10:30', reason: '' })), /REASON/);
+  assert.match(code(() => Att.manualCheckIn(c, aakash, { personId: 'harsh', time: '13:00', reason: 'Phone dead' })), /future/);
+  const r = Att.manualCheckIn(c, aakash, { personId: 'harsh', time: '10:50', reason: 'Phone battery dead' });
+  assert.equal(r.lateMinutes, 20);
+  const p = s.db.rows('Punches')[0];
+  assert.equal(p.enteredBy, 'aakash');
+  assert.match(p.note, /Entered by Aakash: Phone battery dead/);
+  assert.match(code(() => Att.manualCheckIn(c, aakash, { personId: 'harsh', time: '10:50', reason: 'again' })), /Already/);
+});

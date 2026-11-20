@@ -12,11 +12,13 @@
       Object.assign(row, JSON.parse(JSON.stringify(patch)));
     }
   };
-  var n = 0;
+  var n = 0, photos = {};
   var env = {
     sha256: function (s) { var h = 5381; for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0; return 'demo' + h.toString(16); }, // demo only, not secure
     randomId: function () { return 'd' + (++n) + Math.random().toString(36).slice(2, 10); },
-    withLock: function (fn) { return fn(); }
+    withLock: function (fn) { return fn(); },
+    savePhoto: function (name, data) { var id = 'p' + (++n); photos[id] = data; return id; },
+    readPhoto: function (id) { return photos[id]; }
   };
   [['Neha', 'Sales', 'staff', '09:30', '18:30', [3, 4]], ['Vikas', 'Sales', 'staff', '11:00', '20:00', [1, 2]], ['Harsh', 'Sales', 'staff', '10:30', '19:30', [1, 2]],
     ['Raunak', 'Repairing', 'staff', '10:30', '19:30', [1, 2]], ['Manish', 'Repairing', 'staff', '09:30', '18:30', [3, 4]], ['Muskan', 'Testing', 'staff', '10:45', '19:45', []],

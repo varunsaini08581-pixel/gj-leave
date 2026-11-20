@@ -14,10 +14,18 @@
     return h('div', { class: 'btns', style: 'margin:0 0 12px' }, [button('‹ ' + monthName(prevMonth(m)), 'small', function () { fn(prevMonth(m)); }), button(monthName(nextMonth(m)) + ' ›', 'small', function () { fn(nextMonth(m)); })]);
   }
 
+  // A photo is fetched through the API (private Drive folder), never by a public link.
+  window.GJPhoto = function (id) {
+    if (!id) return null;
+    var img = h('img', { alt: 'Check-in photo', style: 'width:100%;border-radius:10px;margin-top:8px;background:#e7ebf3;min-height:60px' });
+    api('photo', { id: id }).then(function (r) { img.src = r.data; }).catch(function () { img.replaceWith(h('div', { class: 'muted' }, 'Photo not available.')); });
+    return img;
+  };
+
   // ---------- menu on the More tab ----------
   window.GJMenu = function () {
     var role = state.me.role, items = [['Today at GJ', 'gj'], ['Notifications', 'notes']];
-    if (role !== 'staff') items = items.concat([['Record a violation / incident', 'incident'], ['Enter leave for a staff member', 'enter'], ['Calendar', 'calendar'],
+    if (role !== 'staff') items = items.concat([['Record a violation / incident', 'incident'], ['Enter leave for a staff member', 'enter'], ['Enter a check-in (phone or camera problem)', 'manualin'], ['Calendar', 'calendar'],
       ['Month report', 'report'], ['Restrictions (blackout dates)', 'restrictions'], ['Set shop location', 'shop']]);
     if (role === 'owner') items = items.concat([['Disputes', 'disputes'], ['Override a rule (leave)', 'override'], ['People, duty times and pay', 'people'], ['Clash rules', 'rules'], ['Grace table', 'grace']]);
     return h('div', { class: 'card' }, [h('h2', {}, 'Menu'), h('ul', { class: 'list' }, items.map(function (it) {
@@ -74,6 +82,16 @@
               note.value = '';
             });
           })), out])]);
+    }).catch(function () {});
+  };
+
+  V.manualin = function () {
+    run(api('incidentItems')).then(function (d) {
+      var who = h('select', {}, d.people.map(function (p) { return h('option', { value: p.id }, p.name); })), time = h('input', { type: 'time' }), why = h('input', { placeholder: 'Why could the person not check in?', maxlength: 120 }), out = h('div', {});
+      show([back(), h('h1', {}, 'Enter a check-in'), h('p', { class: 'sub' }, 'Only when the phone or camera failed. It is labelled "entered by ' + state.me.name + '" and has no photo.'),
+        h('div', { class: 'card' }, [field('Staff member', who), field('Arrival time today', time), field('Reason', why), h('div', { class: 'btns' }, button('Save check-in', 'primary', function () {
+          return run(api('manualCheckIn', { personId: who.value, time: time.value, reason: why.value })).then(function (r) { out.replaceChildren(h('div', { class: 'result green' }, 'Saved. ' + (r.lateMinutes > 10 ? r.lateMinutes + ' min late.' : 'On time.'))); });
+        })), out])]);
     }).catch(function () {});
   };
 

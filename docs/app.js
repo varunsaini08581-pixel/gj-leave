@@ -108,16 +108,18 @@
   VIEWS.home = function () {
     Promise.all([api('today'), api('notifications'), state.me.role !== 'staff' ? api('approvals') : null]).then(function (r) {
       var t = r[0], notes = r[1].slice(-5).reverse(), ap = r[2];
-      if (ap) { state.badge = ap.leaves.length + ap.outings.length + ap.devices.length + ap.absences.length + ap.shorts.length; drawTabs(); }
+      if (ap) { state.badge = ap.leaves.length + ap.outings.length + ap.devices.length + ap.absences.length + ap.shorts.length + (ap.dress || []).length; drawTabs(); }
       var cards = [h('h1', {}, 'Hello, ' + state.me.name), h('p', { class: 'sub' }, niceDate(t.date) + ' · Duty ' + state.me.dutyStart + '–' + state.me.dutyEnd)];
       var tracked = state.me.role === 'staff';
       if (!tracked && window.GJBoard) cards.push(window.GJBoard());
       if (tracked) {
         var c = h('div', { class: 'card' }, h('h2', {}, 'Attendance'));
         if (!t.checkIn) {
-          c.appendChild(h('p', {}, 'You have not checked in yet.'));
+          c.appendChild(h('p', {}, 'You have not checked in yet. The check-in photo is taken sideways (landscape) with the back camera, by another person or the tripod.'));
           c.appendChild(button('Check in', 'primary', function () {
-            return position().then(function (pos) { return run(api('checkIn', pos), 'Checked in.'); }).then(function (res) {
+            var sunday = new Date(Date.parse(t.date + 'T00:00:00Z')).getUTCDay() === 0;
+            return window.GJCamera.capture({ name: state.me.name, deviceShort: state.me.deviceShort, serverOffsetMs: state.offset || 0, shopPoint: state.me.shopPoint,
+              demo: DEMO, dressCheck: !state.me.dressExempt && !sunday }).then(function (shot) { return run(api('checkIn', shot), 'Checked in.'); }, function (e) { toast(e.message, true); throw e; }).then(function (res) {
               if (res.flag) toast('Checked in. Flag: ' + res.flag.replace(/-/g, ' '), true);
               VIEWS.home();
             });
@@ -297,7 +299,7 @@
   // ---------- approvals ----------
   VIEWS.approve = function () {
     run(api('approvals')).then(function (a) {
-      state.badge = a.leaves.length + a.outings.length + a.devices.length + a.absences.length + a.shorts.length; drawTabs();
+      state.badge = a.leaves.length + a.outings.length + a.devices.length + a.absences.length + a.shorts.length + (a.dress || []).length; drawTabs();
       var cards = [h('h1', {}, 'Approvals'), h('p', { class: 'sub' }, state.badge ? state.badge + ' waiting' : 'Nothing is waiting.')];
       function decide(label, okFn, noFn) {
         var why = h('input', { placeholder: 'Reason (required to reject)', maxlength: 120 });
@@ -328,6 +330,13 @@
             h('p', {}, 'Out ' + timeOf(o.approvedAt) + '–' + timeOf(o.backAt)), h('label', {}, 'Correct the back time (only if wrong)'), fix,
             h('div', { class: 'btns' }, button('Confirm back', 'good', function () { return run(api('confirmBack', { id: o.id, correctedTime: fix.value || undefined }), 'Confirmed.').then(VIEWS.approve); }))]));
         }
+      });
+      (a.dress || []).forEach(function (d) {
+        cards.push(h('div', { class: 'card' }, [h('div', { class: 'row' }, [h('strong', {}, d.name + ' \u00b7 Dress check'), h('span', { class: 'chip amber' }, 'Possible issue')]),
+          h('p', {}, niceDate(d.date) + ': ' + d.issues.join(', ') + (d.belt === 'issue' ? ' (hint: belt not seen)' : '')), h('p', { class: 'muted' }, 'The app only flags. Look at the photo and decide.'),
+          window.GJPhoto ? window.GJPhoto(d.photoId) : null,
+          h('div', { class: 'btns' }, [button('Confirm', 'danger', function () { return run(api('decideDress', { id: d.id, confirm: true })).then(function (r) { toast(r.result === 'violation' ? 'Violation recorded.' : 'Noted, within grace.'); VIEWS.approve(); }); }),
+            button('Dismiss', 'good', function () { return run(api('decideDress', { id: d.id, confirm: false }), 'Dismissed.').then(VIEWS.approve); })])]));
       });
       a.absences.forEach(function (r) {
         var why = h('input', { placeholder: 'Reason for excusing', maxlength: 120 });
@@ -368,7 +377,7 @@
 
   // ---------- start ----------
   function start() {
-    return api('me').then(function (me) { state.me = me; go('home'); }, function (e) { if (e.code !== 'AUTH') viewLogin(e.message); });
+    return api('me').then(function (me) { state.me = me; state.offset = me.serverTime - Date.now(); go('home'); }, function (e) { if (e.code !== 'AUTH') viewLogin(e.message); });
   }
   window.GJApp = { h: h, show: show, toast: toast, api: api, run: run, button: button, state: state, VIEWS: VIEWS, go: go, drawTabs: drawTabs,
     niceDate: niceDate, niceDates: niceDates, timeOf: timeOf, todayStr: todayStr, addDays: addDays, statusChip: statusChip, MON: MON, RULE_TEXT: RULE_TEXT, position: position };

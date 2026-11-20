@@ -149,7 +149,14 @@
       if (day.fullLeave || Cal.isRosterOff(person, date)) flag.push('off-day');
       var punch = { id: ctx.env.randomId(), personId: actor.id, date: date, kind: 'in', at: ctx.now, photoId: a.photoId || '',
         lat: a.lat === undefined ? '' : a.lat, lng: a.lng === undefined ? '' : a.lng, accuracy: a.accuracy === undefined ? '' : a.accuracy,
-        distance: distance, deviceId: actor.deviceId || '', flag: flag.join(','), note: '' };
+        distance: distance, deviceId: actor.deviceId || '', flag: flag.join(','), note: '', thumbId: a.thumbId || '', dress: null, dressDecision: '', enteredBy: '' };
+      // Automatic dress check (Mon-Sat; Sunday casual; exempt people skipped). It only FLAGS to Aakash.
+      if (a.dress && !person.dressExempt && Cal.weekday(date) !== 0) {
+        punch.dress = cleanDress(a.dress);
+        if (dressIssues(punch.dress).length) H.byRole(ctx, 'manager').forEach(function (m) {
+          H.notify(ctx, m.id, 'dress', 'Dress check: ' + person.name, 'Possible issue: ' + dressIssues(punch.dress).join(', ') + '. Confirm or dismiss.', punch.id);
+        });
+      }
       ctx.db.insert('Punches', punch);
 
       var late = nowMin(ctx) - day.start, counted = null;
@@ -193,6 +200,51 @@
       }
       H.audit(ctx, actor.id, 'punch.out', punch.id, { early: Math.max(0, early) });
       return { id: punch.id, at: ctx.now, earlyMinutes: Math.max(0, early) };
+    });
+  }
+
+  var DRESS_PARTS = { top: 'top not white', trousers: 'trousers not black', shoes: 'shoes not black', belt: 'belt not seen' };
+  function cleanDress(d) {
+    var out = {};
+    Object.keys(DRESS_PARTS).forEach(function (k) { out[k] = d[k] === 'ok' || d[k] === 'issue' ? d[k] : 'unknown'; });
+    return out;
+  }
+  /** Belt is a weak signal, so it is shown as a hint but never raises a flag on its own. */
+  function dressIssues(d) {
+    return ['top', 'trousers', 'shoes'].filter(function (k) { return d && d[k] === 'issue'; }).map(function (k) { return DRESS_PARTS[k]; });
+  }
+
+  /** Aakash confirms (uses the dress grace, then a violation) or dismisses with 1 tap. Never automatic. */
+  function decideDress(ctx, actor, punchId, confirm, recordIncident) {
+    return ctx.env.withLock(function () {
+      boss(actor);
+      var p = H.find(ctx, 'Punches', punchId);
+      if (!p || !p.dress || p.dressDecision || !dressIssues(p.dress).length) H.fail('NOT_FOUND', 'Nothing to decide.');
+      ctx.db.update('Punches', punchId, { dressDecision: confirm ? 'confirmed' : 'dismissed' });
+      H.audit(ctx, actor.id, confirm ? 'dress.confirm' : 'dress.dismiss', punchId);
+      if (!confirm) return { id: punchId, decision: 'dismissed' };
+      return ctx.env.withLock(function () {
+        return Object.assign({ decision: 'confirmed' }, recordIncident(ctx, actor, { personId: p.personId, item: 'dress', date: p.date, note: 'Dress check: ' + dressIssues(p.dress).join(', '), photoId: p.photoId }));
+      });
+    });
+  }
+
+  /** When a phone or camera fails: Aakash enters the check-in, labelled "entered by Aakash", with a reason. */
+  function manualCheckIn(ctx, actor, a) {
+    return ctx.env.withLock(function () {
+      boss(actor);
+      var person = H.find(ctx, 'People', a.personId), date = H.today(ctx);
+      if (!person || person.role !== 'staff') H.fail('NOT_FOUND', 'Choose a staff member.');
+      if (!String(a.reason || '').trim()) H.fail('REASON', 'Write why the person could not check in.');
+      if (!/^\d{2}:\d{2}$/.test(a.time || '')) H.fail('BLOCKED', 'Enter the exact arrival time.');
+      if (punchesToday(ctx, a.personId, date, 'in').length) H.fail('BLOCKED', 'Already checked in today.');
+      var at = Core.toMs(date, a.time);
+      if (at > ctx.now) H.fail('BLOCKED', 'The time cannot be in the future.');
+      var asThen = { db: ctx.db, env: ctx.env, now: at };
+      var r = checkIn(asThen, { id: person.id, name: person.name, role: 'staff', deviceId: '' }, {});
+      ctx.db.update('Punches', r.id, { enteredBy: actor.id, note: 'Entered by ' + actor.name + ': ' + String(a.reason).trim(), flag: 'entered-by-manager' });
+      H.audit(ctx, actor.id, 'punch.manual', r.id, { personId: a.personId, time: a.time, reason: a.reason });
+      return { id: r.id, lateMinutes: r.lateMinutes };
     });
   }
 
@@ -431,7 +483,7 @@
   }
 
   var api = { requestShort: requestShort, decideShort: decideShort, checkIn: checkIn, checkOut: checkOut, goingOut: goingOut, decideOuting: decideOuting,
-    imBack: imBack, confirmBack: confirmBack, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
+    imBack: imBack, confirmBack: confirmBack, decideDress: decideDress, manualCheckIn: manualCheckIn, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
     syncViolations: syncViolations };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJAttendance = api;

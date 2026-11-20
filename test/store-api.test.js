@@ -132,7 +132,8 @@ test('API privacy: a staff member cannot open another person\u2019s month page',
   assert.equal(a.call(a.t, 'myMonth', a.neha, { personId: 'vikas', month: '2026-11' }).code, 'FORBIDDEN');
   assert.equal(a.call(a.t, 'myMonth', a.neha, { month: '2026-11' }).data.name, 'Neha');
   assert.equal(a.call(a.t, 'myMonth', a.aakash, { personId: 'vikas', month: '2026-11' }).data.name, 'Vikas');
-  assert.equal(a.call(a.t, 'checkIn', a.neha, {}).ok, true);
+  assert.equal(a.call(a.t, 'checkIn', a.neha, {}).code, 'BLOCKED'); // a photo is required
+  assert.equal(a.call(a.t, 'checkIn', a.neha, { photo: 'data:image/jpeg;base64,AAAA', thumb: 'data:image/jpeg;base64,BB' }).ok, true);
 });
 
 test('API: full flow through the dispatcher', () => {
@@ -157,4 +158,20 @@ test('the Apps Script bundle builds and loads with every module wired', () => {
   assert.ok(sandbox.GJStore.setup(g).length > 0);
   const reply = sandbox.GJApi.handle({ db: sandbox.GJStore.open(g), now: Date.now(), env }, { action: 'names', clientVersion: 1 });
   assert.equal(reply.ok, true);
+});
+
+test('photos: Today at GJ thumbnails for everyone today; the full photo only for the person, Aakash and Varun', () => {
+  const a = apiWorld();
+  const pic = { photo: 'data:image/jpeg;base64,FULL', thumb: 'data:image/jpeg;base64,THUMB' };
+  assert.equal(a.call(a.t, 'checkIn', a.neha, pic).ok, true);
+  const row = a.w.ctx(...a.t).db.rows('Punches')[0];
+  assert.ok(row.photoId && row.thumbId && row.photoId !== row.thumbId);
+  assert.equal(a.call(a.t, 'todayAtGJ', a.vikas).data[0].photoId, row.thumbId);
+  assert.equal(a.call(a.t, 'photo', a.vikas, { id: row.thumbId }).data.data, pic.thumb);
+  assert.equal(a.call(a.t, 'photo', a.vikas, { id: row.photoId }).code, 'FORBIDDEN');
+  assert.equal(a.call(a.t, 'photo', a.neha, { id: row.photoId }).data.data, pic.photo);
+  assert.equal(a.call(a.t, 'photo', a.aakash, { id: row.photoId }).data.data, pic.photo);
+  assert.equal(a.call(['2026-11-21', '10:00'], 'photo', a.vikas, { id: row.thumbId }).code, 'FORBIDDEN'); // yesterday's is no longer public
+  assert.equal(a.call(a.t, 'photo', null, { id: row.thumbId }).code, 'AUTH');
+  assert.equal(a.call(a.t, 'checkIn', a.vikas, { photo: 'x'.repeat(900001), thumb: 'y' }).code, 'BLOCKED');
 });

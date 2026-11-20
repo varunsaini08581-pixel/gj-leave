@@ -23,6 +23,9 @@ const env = {
   sha256: s => crypto.createHash('sha256').update(s).digest('hex'),
   randomId: () => 'id' + (++seq) + '_' + crypto.randomBytes(6).toString('hex'),
   withLock: fn => fn(),
+  photos: {},
+  savePhoto(name, data) { const id = 'photo_' + name; this.photos[id] = data; return id; },
+  readPhoto(id) { return this.photos[id]; },
 };
 
 // The real shop roster from the handoff (no real salaries; test values only).
