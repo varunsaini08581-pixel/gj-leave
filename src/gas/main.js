@@ -234,6 +234,45 @@ function resetOwnerPhones() {
   CacheService.getScriptCache().put('v:People', Utilities.getUuid().slice(0, 8), 21600);
   return n + ' owner phone(s) removed. Sign in with the owner PIN now.';
 }
+/** A menu in the Google Sheet. Only someone who can open the Sheet (the owner) sees it. */
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('GJ Leave')
+    .addItem('Set owner PIN', 'setOwnerPin')
+    .addItem('Reset owner phones (lost phone)', 'resetOwnerPhonesFromMenu')
+    .addToUi();
+}
+/**
+ * The owner sets (or resets) his own PIN here, typed by him in the Sheet; nobody else ever sees it.
+ * Staff PINs are set by the owner inside the app (More > People > PIN).
+ */
+function setOwnerPin() {
+  var ui = SpreadsheetApp.getUi();
+  var a = ui.prompt('Set owner PIN', 'Type a new PIN of 4 to 6 digits.', ui.ButtonSet.OK_CANCEL);
+  if (a.getSelectedButton() !== ui.Button.OK) return;
+  var pin = String(a.getResponseText()).replace(/\s/g, '');
+  if (!/^\d{4,6}$/.test(pin)) { ui.alert('The PIN must be 4 to 6 digits. Nothing was changed.'); return; }
+  var b = ui.prompt('Set owner PIN', 'Type the same PIN again.', ui.ButtonSet.OK_CANCEL);
+  if (b.getSelectedButton() !== ui.Button.OK) return;
+  if (String(b.getResponseText()).replace(/\s/g, '') !== pin) { ui.alert('The two PINs are not the same. Nothing was changed.'); return; }
+  var lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    var db = GJStore.open(gjGrid_()), env = gjEnv_();
+    var owner = db.rows('People').filter(function (p) { return p.role === 'owner' && p.active !== false; })[0];
+    if (!owner) { ui.alert('There is no owner in the People tab.'); return; }
+    var salt = env.randomId();
+    db.update('People', owner.id, { pinSalt: salt, pinHash: env.sha256(salt + ':' + pin), pinTries: 0, pinLockedUntil: 0, pinLockLevel: 0 });
+    db.insert('Audit', { id: env.randomId(), at: Date.now(), actor: owner.id, action: 'pin.set-owner-from-sheet', ref: owner.id, detail: {} });
+    db.flush();
+    CacheService.getScriptCache().put('v:People', Utilities.getUuid().slice(0, 8), 21600);
+    CacheService.getScriptCache().put('v:Audit', Utilities.getUuid().slice(0, 8), 21600);
+  } finally { lock.releaseLock(); }
+  ui.alert('Owner PIN saved for ' + owner.name + '. Sign in on your phone with it now.');
+}
+function resetOwnerPhonesFromMenu() {
+  var ui = SpreadsheetApp.getUi();
+  if (ui.alert('Reset owner phones', 'Your current phone will stop working in the app. Continue?', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+  ui.alert(resetOwnerPhones());
+}
 function gjReadPhoto_(id) {
   return 'data:image/jpeg;base64,' + Utilities.base64Encode(DriveApp.getFileById(id).getBlob().getBytes());
 }

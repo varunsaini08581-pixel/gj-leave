@@ -26,7 +26,7 @@ def build(out):
                         'Hard rule override, likhi wajah ke saath', 'Dispute ka faisla (rakho ya hatao)',
                         '3 din se zyada ki chhutti mein doosri haan', 'Aakash ki chhutti', 'Settings: log, duty time, salary, rules',
                         'Mahina lock karna'], g.BLUE_BG, g.BLUE),
-        ('Aakash', ['Chhutti approve / reject', 'Late, early aur going-out approve', 'Wapas aane ko confirm',
+        ('Aakash', ['Aapka naya phone approve karna, sirf jab aapka phone kho jaye (aapko alert jayega)', 'Chhutti approve / reject', 'Late, early aur going-out approve', 'Wapas aane ko confirm',
                     'Dress flag: confirm ya dismiss', 'Manual violation (photo ya note ke saath)',
                     'Absent ko "humanitarian - excused" karna', 'App band ho to baad mein entry ("entered by Aakash")',
                     'Restricted dates jodna'], g.GREEN_BG, g.GREEN),
@@ -37,6 +37,7 @@ def build(out):
         ['Roz subah', 'Today at GJ', 'Kaun aaya, photo, dukaan se doori, dress flag'],
         ['Roz', 'Approvals', 'Pending request. 2 ghante mein jawab na ho to Aakash ko dobara yaad dilaya jata hai'],
         ['Jab aaye', 'Devices', 'Naya phone approve karne ki request. Pehle staff se poochh lo ki phone sach mein badla hai'],
+        ['Jab aaye', 'Approvals (laal)', 'Kisi ne ek din mein 4 ya zyada request bheji. 6th se seedha aapke paas aati hai. Wajah poochho'],
         ['Jab aaye', 'Disputes', 'Violation par aapatti. 24 ghante ke andar hi aa sakti hai'],
         ['Hafte mein 1 baar', 'Board / Calendar', 'Aane wale hafte mein kaun chhutti par, kahan "possible clash"'],
         ['Mahine ke end mein', 'Month report', 'Har insaan: chhutti, bank, violation, "would be deducted". Override alag se dikhte hain. Phir lock'],
@@ -52,6 +53,8 @@ def build(out):
         ['Email alerts', 'Sirf email aur app ke andar. SMS nahi hai. Google ki roz ki email limit hai (lagbhag 100)'],
         ['Rollback', 'Har badlav ka zip Drive ke "GJ Software Backups" mein hai. Purana version Apps Script mein '
                      'Manage deployments se wapas chun sakte ho; link wahi rehta hai'],
+        ['Phone kho gaya', 'Naye phone par PIN se sign in karo. Aakash use approve kar sakta hai. Aakash na ho to Apps Script editor mein resetOwnerPhones chalao, phir PIN se sign in'],
+        ['Sunday swap', 'App mein alag niyam nahi. Har din par wahi niyam lagte hain. Swap ka hisaab aap haath se theek karte ho (override ya correction)'],
         ['WhatsApp group', 'Pehle din se band. App band ho to staff Aakash ko call ya seedha WhatsApp kare'],
     ], [W * 0.36, W * 0.64]))
 

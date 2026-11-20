@@ -177,8 +177,8 @@ def build(out):
     s.append(steps([
         ('"Going out" dabao, wajah aur andaazan samay likho', 'Request Aakash sir ke paas jayegi.'),
         ('Approve hone ke baad niklo', 'Samay Aakash sir ke approve karne se ginta hai.'),
-        ('Wapas aate hi "I’m back" dabao', 'Aakash sir confirm karenge. <b>15 minute tak free.</b> 15 se upar gaye '
-                                               'to poora samay 2 ghante ke bank se katega.'),
+        ('Wapas aate hi "I’m back" dabao', 'Aakash sir confirm karenge. <b>Din ka pehla chhota outing (15 minute tak) free</b>, sirf ek baar. '
+                                               'Usi din doosra outing, ya 15 minute se upar, poora samay 2 ghante ke bank se katega.'),
     ], AMBER))
     s.append(PageBreak())
 
@@ -221,6 +221,12 @@ def build(out):
     s.append(Paragraph('Tareekh badalni ya cancel karni ho to "My requests" mein jao. Naya message mat bhejo; '
                        'badlav par saari jaanch dobara hoti hai. Approve ho chuki chhutti badli to wo dobara Aakash sir ke paas jayegi. '
                        'Half day ke liye bhi notice aapki duty shuru hone ke samay tak gina jata hai.', S))
+    s.append(gap(6))
+    s.append(card('Ek din mein bahut saari request', [
+        'Ek din mein <b>3 request</b> tak sab normal.',
+        '<b>4th aur 5th</b> request: laal (red) chetavni, aur wo hamesha Aakash sir ki manzoori mein jayegi.',
+        '<b>6th request se</b>: seedha Varun sir ke paas. Dekha jayega ki kya baat hai.',
+    ], RED_BG if 'RED_BG' in globals() else AMBER_BG, RED if 'RED' in globals() else AMBER))
     s.append(PageBreak())
 
     # 4 ------------------------------------------------------------------
@@ -230,14 +236,14 @@ def build(out):
         ['10 minute tak late', 'Kuch nahi (roz ki chhoot)'],
         ['10 minute se zyada late', '10 ke baad wale minute bank se. 22 min late = 12 min'],
         ['Duty khatam hone se pehle nikle', 'Jitna jaldi nikle utne minute bank se'],
-        ['Bahar gaye, 15 min tak', 'Free'],
-        ['Bahar gaye, 15 min se zyada', 'Poora samay bank se'],
+        ['Bahar gaye, 15 min tak (din mein pehli baar)', 'Free'],
+        ['Usi din doosri baar bahar, ya 15 min se zyada', 'Poora samay bank se'],
         ['Ek din mein 2 ghante se zyada gayab', '<b>Half day</b> chhutti (4.5 ghante se zyada = poora din)'],
     ], [W * 0.45, W * 0.55]))
     s.append(gap(9))
     s.append(card('"Bataya hua" (informed) ka matlab', [
         '<b>Late:</b> duty shuru hone se <b>pehle</b> app mein "I will be late" bhejo, pahunchne ka samay likh kar.',
-        '<b>Jaldi jana:</b> nikalne se <b>pehle</b> "I will leave early" bhejo, samay likh kar.',
+        '<b>Jaldi jana:</b> nikalne se <b>pehle</b> "I will leave early" bhejo, samay likh kar. Check out ke baad bheji request nahi chalegi.',
         'Dono request <b>Aakash sir approve</b> karte hain. Reject hui to wo minute "bina bataye" ginenge.',
         'Jo samay likha us se zyada late hue, ya likhe samay se pehle nikal gaye, to utne extra minute "bina bataye" ginenge.',
     ], BLUE_BG, BLUE))
@@ -301,7 +307,7 @@ def build(out):
     s.append(card('5 baatein yaad rakho', [
         '1. Late ho rahe ho? Duty shuru hone se <b>pehle</b> app mein daal do.',
         '2. Chhutti kam se kam <b>48 ghante pehle</b> daalo, to aksar apne aap approve ho jati hai.',
-        '3. Bahar jao to "Going out", aao to "I’m back". 15 minute ke andar raho.',
+        '3. Bahar jao to "Going out", aao to "I’m back". 15 minute tak free, din mein sirf ek baar.',
         '4. Check in photo: phone tedha, peeche ka camera, sir se pair tak.',
         '5. Group mein message nahi. App na chale to Aakash sir ko call.',
     ], AMBER_BG, AMBER))

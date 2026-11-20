@@ -193,6 +193,9 @@ Rounds 15 (0/1/5/3) and 16 (0/0/3/7) fixed: 28 reproducers pass (1 expectation a
 ### 20 Nov 2026, 23:56 IST
 Rounds 17 (0/0/7/4) and 18 (0/0/3/5) fixed: 29 reproducers pass. Owner decisions of 23:46 built (requests per day, free outing once a day; phone recovery and leave-day rule confirmed). 458 tests. Server version 9.
 
+### 21 Nov 2026, 00:00 IST
+Go-live prep: real Sheet 'GJ Leave' created (id 1M72Pp0SqqNDyqO2fYLtC7tZB3BMwSQSWMW4HXxVVOCY), bound script being set up; owner sets his own PIN from the Sheet menu.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
