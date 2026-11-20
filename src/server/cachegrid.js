@@ -49,7 +49,22 @@
       tabNames: function () { return grid.tabNames(); },
       addTab: function (name) { dirty[name] = true; return grid.addTab(name); },
       read: read,
-      headers: function (tab) { var d = read(tab); return d.length ? d[0] : []; },
+      // Headers change only in setup, so they have their own long-lived entry and inserting a row
+      // never needs the whole tab.
+      headers: function (tab) {
+        var key = 'h:' + tab, text = null;
+        try { text = (cache.getAll([key]) || {})[key]; } catch (e) { text = null; }
+        if (text) { try { return JSON.parse(text); } catch (e) { /* fall through */ } }
+        var h = grid.headers ? grid.headers(tab) : (grid.read(tab)[0] || []);
+        try { if (h.length) cache.put(key, JSON.stringify(h), VERSION_TTL); } catch (e) { /* optional */ }
+        return h;
+      },
+      tail: function (tab, n) { return grid.tail ? grid.tail(tab, n) : grid.read(tab).slice(1).slice(-n); },
+      appendMany: function (batch) {
+        batch.forEach(function (b) { dirty[b.tab] = true; });
+        if (grid.appendMany) return grid.appendMany(batch);
+        var first = {}; batch.forEach(function (b) { first[b.tab] = grid.appendRows(b.tab, b.rows); }); return first;
+      },
       append: function (tab, row) { dirty[tab] = true; return grid.append(tab, row); },
       appendRows: function (tab, rows) { dirty[tab] = true; return grid.appendRows(tab, rows); },
       writeRow: function (tab, i, row) { dirty[tab] = true; return grid.writeRow(tab, i, row); },

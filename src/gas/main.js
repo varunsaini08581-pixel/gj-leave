@@ -11,6 +11,7 @@ function gjGrid_() {
     tabNames: function () { return ss.getSheets().map(function (s) { return s.getName(); }); },
     addTab: function (name) {
       var sh = ss.insertSheet(name);
+      if (sh.getMaxColumns() < 40) sh.insertColumnsAfter(sh.getMaxColumns(), 40 - sh.getMaxColumns());
       sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setNumberFormat('@'); // plain text everywhere
     },
     read: function (name) {
@@ -18,26 +19,44 @@ function gjGrid_() {
       if (!sh || sh.getLastRow() === 0) return [];
       return sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
     },
-    append: function (name, row) {
-      var sh = ss.getSheetByName(name);
-      var r = sh.getLastRow() + 1;
-      sh.getRange(r, 1, 1, row.length).setNumberFormat('@').setValues([row]);
-    },
+    append: function (name, row) { return this.appendRows(name, [row]); },
     headers: function (name) {
       var sh = ss.getSheetByName(name);
       if (!sh || sh.getLastRow() === 0) return [];
       return sh.getRange(1, 1, 1, sh.getLastColumn()).getDisplayValues()[0];
     },
-    /** Writes many rows in one call. Returns the 0-based index of the first row written. */
-    appendRows: function (name, rows) {
-      var sh = ss.getSheetByName(name);
-      var r = sh.getLastRow() + 1;
-      sh.getRange(r, 1, rows.length, rows[0].length).setNumberFormat('@').setValues(rows);
-      return r - 1;
+    /** The last n data rows of a tab, without reading the whole tab. */
+    tail: function (name, n) {
+      var sh = ss.getSheetByName(name), last = sh ? sh.getLastRow() : 0;
+      if (last < 2) return [];
+      var from = Math.max(2, last - n + 1);
+      return sh.getRange(from, 1, last - from + 1, sh.getLastColumn()).getDisplayValues();
+    },
+    appendRows: function (name, rows) { return this.appendMany([{ tab: name, rows: rows }])[name]; },
+    /**
+     * Appends rows to several tabs. All reads (where does each tab end?) happen first, then all
+     * writes, so Apps Script sends the writes together. Returns { tab: 0-based index of the first row }.
+     */
+    appendMany: function (batch) {
+      var plan = batch.map(function (b) {
+        var sh = ss.getSheetByName(b.tab);
+        return { b: b, sh: sh, at: sh.getLastRow() + 1, max: sh.getMaxRows() };
+      });
+      var first = {};
+      plan.forEach(function (p) {
+        var need = p.at + p.b.rows.length - 1;
+        if (need > p.max) { // grow the tab; new rows are plain text like the rest
+          p.sh.insertRowsAfter(p.max, Math.max(500, need - p.max));
+          p.sh.getRange(p.max + 1, 1, p.sh.getMaxRows() - p.max, p.sh.getMaxColumns()).setNumberFormat('@');
+        }
+        p.sh.getRange(p.at, 1, p.b.rows.length, p.b.rows[0].length).setValues(p.b.rows);
+        first[p.b.tab] = p.at - 1;
+      });
+      return first;
     },
     writeRow: function (name, index, row) {
       var sh = ss.getSheetByName(name);
-      sh.getRange(index + 1, 1, 1, row.length).setNumberFormat('@').setValues([row]);
+      sh.getRange(index + 1, 1, 1, row.length).setValues([row]); // the whole tab is already plain text
     }
   };
 }
@@ -92,6 +111,7 @@ function setupOrUpgrade() {
     // Setup may have changed columns: retire every cached copy.
     var all = {}; Object.keys(GJSchema.TABS).forEach(function (t) { all['v:' + t] = Utilities.getUuid().slice(0, 8); });
     CacheService.getScriptCache().putAll(all, 21600);
+    CacheService.getScriptCache().removeAll(Object.keys(GJSchema.TABS).map(function (t) { return 'h:' + t; }));
     Logger.log(done.length ? done.join('\n') : 'Nothing to do. Already up to date.');
     return done;
   } finally { lock.releaseLock(); }

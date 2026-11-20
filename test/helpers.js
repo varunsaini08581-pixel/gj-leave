@@ -8,6 +8,7 @@ function memoryDb() {
   return {
     data,
     rows: tab => data[tab],
+    tail: (tab, n) => data[tab].slice(-n),
     insert: (tab, obj) => { data[tab].push(JSON.parse(JSON.stringify(obj))); },
     update: (tab, id, patch) => {
       const key = TABS[tab][0]; // the first column is the key, exactly like the Sheet store

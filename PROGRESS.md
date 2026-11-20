@@ -135,6 +135,13 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Login, PIN set and phone approval now run inside the server lock (they write), and buffered writes are flushed inside the lock even when the action ends in an error (a wrong PIN is still counted).
 - Tests: 116 pass.
 
+### 20 Nov 2026, 17:41 IST
+- v5 timings: reads right after a write are now about 2.1 s, but the writes themselves were slow (login 5 s, phone approval 4.5 s, check-in 10 s). Cause: on the real Sheet a read between two writes forces a round trip, and each tab append did read-then-write.
+- All appended rows of a request now go in ONE step (find the end of every tab first, then write them all), header rows are cached, and the thumbnail is stored as a small cell in a new Thumbs tab instead of a second Drive file (read back from the last 80 rows only).
+- Found and fixed before it could bite: a tab is created with 1000 rows; appending beyond that would have failed. Tabs now grow by 500 rows (plain text) when needed.
+- A second check-in the same day is refused before any photo is stored.
+- Tests: 116 pass; management phone check passes.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.

@@ -5,6 +5,7 @@
   Object.keys(root.GJSchema.TABS).forEach(function (t) { data[t] = []; });
   var db = {
     rows: function (tab) { return data[tab]; },
+    tail: function (tab, n) { return data[tab].slice(-n); },
     insert: function (tab, obj) { data[tab].push(JSON.parse(JSON.stringify(obj))); },
     update: function (tab, id, patch) {
       var key = root.GJSchema.TABS[tab][0];

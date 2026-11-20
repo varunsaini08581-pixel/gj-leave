@@ -502,6 +502,7 @@
     ShortRequests: ['id', 'personId', 'date', 'kind', 'time', 'submittedAt', 'status', 'note', 'decidedAt', 'decidedBy', 'decisionReason', 'remindedAt'],
     Outings: ['id', 'personId', 'date', 'reason', 'expectedMinutes', 'requestedAt', 'status', 'approvedAt', 'approvedBy',
       'decisionReason', 'backAt', 'confirmedAt', 'confirmedBy', 'correctedBackAt', 'minutes', 'remindedAt'],
+    Thumbs: ['id', 'personId', 'date', 'data'],
     Punches: ['id', 'personId', 'date', 'kind', 'at', 'photoId', 'lat', 'lng', 'accuracy', 'distance', 'deviceId', 'flag', 'note', 'thumbId', 'dress', 'dressDecision', 'enteredBy'],
     DayMinutes: ['id', 'personId', 'date', 'kind', 'minutes', 'informed', 'statedMinutes', 'source', 'note', 'shortId'],
     Incidents: ['id', 'personId', 'date', 'item', 'note', 'photoId', 'createdBy', 'createdAt', 'result', 'countInPeriod', 'grace'],
@@ -586,7 +587,22 @@
       tabNames: function () { return grid.tabNames(); },
       addTab: function (name) { dirty[name] = true; return grid.addTab(name); },
       read: read,
-      headers: function (tab) { var d = read(tab); return d.length ? d[0] : []; },
+      // Headers change only in setup, so they have their own long-lived entry and inserting a row
+      // never needs the whole tab.
+      headers: function (tab) {
+        var key = 'h:' + tab, text = null;
+        try { text = (cache.getAll([key]) || {})[key]; } catch (e) { text = null; }
+        if (text) { try { return JSON.parse(text); } catch (e) { /* fall through */ } }
+        var h = grid.headers ? grid.headers(tab) : (grid.read(tab)[0] || []);
+        try { if (h.length) cache.put(key, JSON.stringify(h), VERSION_TTL); } catch (e) { /* optional */ }
+        return h;
+      },
+      tail: function (tab, n) { return grid.tail ? grid.tail(tab, n) : grid.read(tab).slice(1).slice(-n); },
+      appendMany: function (batch) {
+        batch.forEach(function (b) { dirty[b.tab] = true; });
+        if (grid.appendMany) return grid.appendMany(batch);
+        var first = {}; batch.forEach(function (b) { first[b.tab] = grid.appendRows(b.tab, b.rows); }); return first;
+      },
       append: function (tab, row) { dirty[tab] = true; return grid.append(tab, row); },
       appendRows: function (tab, rows) { dirty[tab] = true; return grid.appendRows(tab, rows); },
       writeRow: function (tab, i, row) { dirty[tab] = true; return grid.writeRow(tab, i, row); },
@@ -727,15 +743,26 @@
     }
     function toArray(tab, headers, obj) { return headers.map(function (h) { return encode(tab, h, obj[h]); }); }
     function flush() {
-      var full = {};
+      var full = {}, firstRows = {}, batch = [];
+      // All appended rows of this request go to the Sheet in ONE step (reads first, then writes),
+      // because on the real Sheet every read placed between two writes costs a round trip.
+      Object.keys(cache).forEach(function (tab) {
+        var t = cache[tab];
+        if (t.pending.length) batch.push({ tab: tab, rows: t.pending.map(function (r) { return toArray(tab, t.headers, r); }) });
+      });
+      if (batch.length) {
+        if (grid.appendMany) firstRows = grid.appendMany(batch) || {};
+        else batch.forEach(function (b) {
+          if (grid.appendRows) firstRows[b.tab] = grid.appendRows(b.tab, b.rows);
+          else { firstRows[b.tab] = null; b.rows.forEach(function (a) { grid.append(b.tab, a); }); }
+        });
+      }
       Object.keys(cache).forEach(function (tab) {
         var t = cache[tab];
         var changed = t.pending.length || t.dirty.length;
         if (t.pending.length) {
-          var arrays = t.pending.map(function (r) { return toArray(tab, t.headers, r); });
-          var first = grid.appendRows ? grid.appendRows(tab, arrays) : null;
-          if (first === null || first === undefined) { first = null; arrays.forEach(function (a) { grid.append(tab, a); }); }
-          t.pending.forEach(function (r, i) { r.__row = first === null ? -1 : first + i; });
+          var first = firstRows[tab];
+          t.pending.forEach(function (r, i) { r.__row = first === null || first === undefined ? -1 : first + i; });
           t.pending = [];
         }
         t.dirty.forEach(function (r) { if (r.__row > 0) grid.writeRow(tab, r.__row, toArray(tab, t.headers, r)); });
@@ -773,6 +800,14 @@
         });
         if (row.__row > 0 && t.dirty.indexOf(row) === -1) t.dirty.push(row); // a not-yet-written row is simply written with its new values
         if (!buffer) flush();
+      },
+      /** The last n rows of a tab without reading the whole tab (used for today's thumbnails). */
+      tail: function (tab, n) {
+        var t = entry(tab);
+        if (t.rows) return t.rows.slice(-n);
+        var headers = headersOf(tab), data = grid.tail ? grid.tail(tab, n) : grid.read(tab).slice(1).slice(-n);
+        var out = data.map(function (r) { var o = {}; headers.forEach(function (h, c) { o[h] = decode(tab, h, r[c]); }); return o; });
+        return out.concat(t.pending).slice(-n);
       },
       flush: flush
     };
@@ -2317,16 +2352,26 @@
     checkIn: function (ctx, actor, a) {
       // The check-in photo is taken inside the app (back camera, landscape) and is required.
       if (!a.photo || !a.thumb) throw err('BLOCKED', 'Take the check-in photo first.');
-      if (String(a.photo).length > 900000 || String(a.thumb).length > 120000) throw err('BLOCKED', 'The photo is too large. Please try again.');
+      if (String(a.photo).length > 900000 || String(a.thumb).length > 45000) throw err('BLOCKED', 'The photo is too large. Please try again.');
+      if (ctx.db.rows('Punches').some(function (x) { return x.personId === actor.id && x.date === Core._.today(ctx) && x.kind === 'in'; })) throw err('BLOCKED', 'You have already checked in today.');
       var stamp = Core._.today(ctx) + '_' + actor.id + '_' + ctx.now;
-      var args = { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, photoId: ctx.env.savePhoto(stamp + '.jpg', a.photo), thumbId: ctx.env.savePhoto(stamp + '_thumb.jpg', a.thumb) };
-      return Att.checkIn(ctx, actor, args);
+      // Full photo: private Drive folder. Thumbnail: a small cell in the Thumbs tab (no second Drive file).
+      var thumbId = 't_' + ctx.env.randomId();
+      var args = { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, photoId: ctx.env.savePhoto(stamp + '.jpg', a.photo), thumbId: thumbId };
+      var result = Att.checkIn(ctx, actor, args);
+      ctx.db.insert('Thumbs', { id: thumbId, personId: actor.id, date: Core._.today(ctx), data: a.thumb });
+      return result;
     },
     photo: function (ctx, actor, a) {
       var p = ctx.db.rows('Punches').filter(function (x) { return x.photoId === a.id || x.thumbId === a.id; })[0];
       if (!p) throw err('NOT_FOUND', 'No such photo.');
       var isThumbToday = p.thumbId === a.id && p.date === Core._.today(ctx);   // "Today at GJ": everyone
       if (!(isThumbToday || actor.role !== 'staff' || p.personId === actor.id)) throw err('FORBIDDEN', 'You cannot see this photo.');
+      if (p.thumbId === a.id) {
+        var th = ctx.db.tail('Thumbs', 80).filter(function (x) { return x.id === a.id; })[0]; // recent thumbnails only
+        if (th) return { data: th.data };
+        return { data: ctx.env.readPhoto(p.photoId) }; // older than the recent rows: fall back to the photo itself
+      }
       return { data: ctx.env.readPhoto(a.id) };
     },
     decideDress: function (ctx, actor, a) { return Att.decideDress(ctx, actor, a.id, !!a.confirm, Admin.recordIncident); },
@@ -2458,6 +2503,7 @@ function gjGrid_() {
     tabNames: function () { return ss.getSheets().map(function (s) { return s.getName(); }); },
     addTab: function (name) {
       var sh = ss.insertSheet(name);
+      if (sh.getMaxColumns() < 40) sh.insertColumnsAfter(sh.getMaxColumns(), 40 - sh.getMaxColumns());
       sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setNumberFormat('@'); // plain text everywhere
     },
     read: function (name) {
@@ -2465,26 +2511,44 @@ function gjGrid_() {
       if (!sh || sh.getLastRow() === 0) return [];
       return sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
     },
-    append: function (name, row) {
-      var sh = ss.getSheetByName(name);
-      var r = sh.getLastRow() + 1;
-      sh.getRange(r, 1, 1, row.length).setNumberFormat('@').setValues([row]);
-    },
+    append: function (name, row) { return this.appendRows(name, [row]); },
     headers: function (name) {
       var sh = ss.getSheetByName(name);
       if (!sh || sh.getLastRow() === 0) return [];
       return sh.getRange(1, 1, 1, sh.getLastColumn()).getDisplayValues()[0];
     },
-    /** Writes many rows in one call. Returns the 0-based index of the first row written. */
-    appendRows: function (name, rows) {
-      var sh = ss.getSheetByName(name);
-      var r = sh.getLastRow() + 1;
-      sh.getRange(r, 1, rows.length, rows[0].length).setNumberFormat('@').setValues(rows);
-      return r - 1;
+    /** The last n data rows of a tab, without reading the whole tab. */
+    tail: function (name, n) {
+      var sh = ss.getSheetByName(name), last = sh ? sh.getLastRow() : 0;
+      if (last < 2) return [];
+      var from = Math.max(2, last - n + 1);
+      return sh.getRange(from, 1, last - from + 1, sh.getLastColumn()).getDisplayValues();
+    },
+    appendRows: function (name, rows) { return this.appendMany([{ tab: name, rows: rows }])[name]; },
+    /**
+     * Appends rows to several tabs. All reads (where does each tab end?) happen first, then all
+     * writes, so Apps Script sends the writes together. Returns { tab: 0-based index of the first row }.
+     */
+    appendMany: function (batch) {
+      var plan = batch.map(function (b) {
+        var sh = ss.getSheetByName(b.tab);
+        return { b: b, sh: sh, at: sh.getLastRow() + 1, max: sh.getMaxRows() };
+      });
+      var first = {};
+      plan.forEach(function (p) {
+        var need = p.at + p.b.rows.length - 1;
+        if (need > p.max) { // grow the tab; new rows are plain text like the rest
+          p.sh.insertRowsAfter(p.max, Math.max(500, need - p.max));
+          p.sh.getRange(p.max + 1, 1, p.sh.getMaxRows() - p.max, p.sh.getMaxColumns()).setNumberFormat('@');
+        }
+        p.sh.getRange(p.at, 1, p.b.rows.length, p.b.rows[0].length).setValues(p.b.rows);
+        first[p.b.tab] = p.at - 1;
+      });
+      return first;
     },
     writeRow: function (name, index, row) {
       var sh = ss.getSheetByName(name);
-      sh.getRange(index + 1, 1, 1, row.length).setNumberFormat('@').setValues([row]);
+      sh.getRange(index + 1, 1, 1, row.length).setValues([row]); // the whole tab is already plain text
     }
   };
 }
@@ -2539,6 +2603,7 @@ function setupOrUpgrade() {
     // Setup may have changed columns: retire every cached copy.
     var all = {}; Object.keys(GJSchema.TABS).forEach(function (t) { all['v:' + t] = Utilities.getUuid().slice(0, 8); });
     CacheService.getScriptCache().putAll(all, 21600);
+    CacheService.getScriptCache().removeAll(Object.keys(GJSchema.TABS).map(function (t) { return 'h:' + t; }));
     Logger.log(done.length ? done.join('\n') : 'Nothing to do. Already up to date.');
     return done;
   } finally { lock.releaseLock(); }

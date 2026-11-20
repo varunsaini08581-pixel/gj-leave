@@ -21,6 +21,7 @@ function fakeGrid() {
     append: (name, row) => { calls.append += 1; tabs[name].push(row.map(String)); },
     writeRow: (name, i, row) => { calls.writeRow += 1; tabs[name][i] = row.map(String); },
     headers: name => { calls.headers += 1; return (tabs[name] && tabs[name][0] || []).slice(); },
+    tail: (name, n) => tabs[name].slice(1).slice(-n).map(r => r.slice()),
     appendRows: (name, rows) => { calls.appendRows += 1; const first = tabs[name].length; rows.forEach(r => tabs[name].push(r.map(String))); return first; },
     calls,
   };
@@ -152,7 +153,7 @@ test('API: full flow through the dispatcher', () => {
 test('the Apps Script bundle builds and loads with every module wired', () => {
   require('node:child_process').execFileSync(process.execPath, [path.join(__dirname, '..', 'tools', 'build.js')]);
   const code = fs.readFileSync(path.join(__dirname, '..', 'apps-script', 'Code.js'), 'utf8');
-  const sandbox = {}; sandbox.globalThis = sandbox;
+  const sandbox = {}; sandbox.globalThis = sandbox; // (the bundle is only parsed and its modules exercised; Google services are not available here)
   vm.runInNewContext(code, sandbox);
   ['GJCalendar', 'GJClash', 'GJLeave', 'GJMinutes', 'GJSchema', 'GJCacheGrid', 'GJStore', 'GJCore', 'GJAttendance', 'GJAdmin', 'GJViews', 'GJJobs', 'GJApi'].forEach(n => assert.ok(sandbox[n], n));
   ['doPost', 'doGet', 'setupOrUpgrade'].forEach(n => assert.equal(typeof sandbox[n], 'function', n));
@@ -165,10 +166,13 @@ test('the Apps Script bundle builds and loads with every module wired', () => {
 
 test('photos: Today at GJ thumbnails for everyone today; the full photo only for the person, Aakash and Varun', () => {
   const a = apiWorld();
+  Object.keys(env.photos).forEach(k => delete env.photos[k]);
   const pic = { photo: 'data:image/jpeg;base64,FULL', thumb: 'data:image/jpeg;base64,THUMB' };
   assert.equal(a.call(a.t, 'checkIn', a.neha, pic).ok, true);
   const row = a.w.ctx(...a.t).db.rows('Punches')[0];
   assert.ok(row.photoId && row.thumbId && row.photoId !== row.thumbId);
+  assert.equal(a.w.g.tabs.Thumbs.length, 2);                                   // the thumbnail is a Sheet cell, not a Drive file
+  assert.equal(Object.keys(env.photos).filter(k => k.includes('neha')).length, 1);
   assert.equal(a.call(a.t, 'todayAtGJ', a.vikas).data[0].photoId, row.thumbId);
   assert.equal(a.call(a.t, 'photo', a.vikas, { id: row.thumbId }).data.data, pic.thumb);
   assert.equal(a.call(a.t, 'photo', a.vikas, { id: row.photoId }).code, 'FORBIDDEN');
@@ -177,6 +181,9 @@ test('photos: Today at GJ thumbnails for everyone today; the full photo only for
   assert.equal(a.call(['2026-11-21', '10:00'], 'photo', a.vikas, { id: row.thumbId }).code, 'FORBIDDEN'); // yesterday's is no longer public
   assert.equal(a.call(a.t, 'photo', null, { id: row.thumbId }).code, 'AUTH');
   assert.equal(a.call(a.t, 'checkIn', a.vikas, { photo: 'x'.repeat(900001), thumb: 'y' }).code, 'BLOCKED');
+  assert.equal(a.call(a.t, 'checkIn', a.vikas, { photo: 'x', thumb: 'y'.repeat(45001) }).code, 'BLOCKED');
+  assert.equal(a.call(a.t, 'checkIn', a.neha, pic).code, 'BLOCKED');           // a second check-in does not store another photo
+  assert.equal(Object.keys(env.photos).filter(k => k.includes('neha')).length, 1);
 });
 
 test('buffered store (used on the real Sheet): same result, far fewer writes, write-only tabs are not read', () => {

@@ -77,7 +77,9 @@
           var photo = canvas.toDataURL('image/jpeg', 0.72);
           if (photo.length > 880000) photo = canvas.toDataURL('image/jpeg', 0.5);
           var t = document.createElement('canvas'); t.width = THUMB_W; t.height = Math.round(hgt * THUMB_W / w); t.getContext('2d').drawImage(canvas, 0, 0, t.width, t.height);
-          var out = { photo: photo, thumb: t.toDataURL('image/jpeg', 0.6), dress: dress || undefined };
+          var thumb = t.toDataURL('image/jpeg', 0.6);
+          if (thumb.length > 42000) thumb = t.toDataURL('image/jpeg', 0.35); // must fit in one Sheet cell
+          var out = { photo: photo, thumb: thumb, dress: dress || undefined };
           if (pos) { out.lat = pos.lat; out.lng = pos.lng; out.accuracy = pos.accuracy; }
           close(); resolve(out);
         }).catch(function (e) { close(); reject(e); });

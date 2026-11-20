@@ -106,15 +106,26 @@
     }
     function toArray(tab, headers, obj) { return headers.map(function (h) { return encode(tab, h, obj[h]); }); }
     function flush() {
-      var full = {};
+      var full = {}, firstRows = {}, batch = [];
+      // All appended rows of this request go to the Sheet in ONE step (reads first, then writes),
+      // because on the real Sheet every read placed between two writes costs a round trip.
+      Object.keys(cache).forEach(function (tab) {
+        var t = cache[tab];
+        if (t.pending.length) batch.push({ tab: tab, rows: t.pending.map(function (r) { return toArray(tab, t.headers, r); }) });
+      });
+      if (batch.length) {
+        if (grid.appendMany) firstRows = grid.appendMany(batch) || {};
+        else batch.forEach(function (b) {
+          if (grid.appendRows) firstRows[b.tab] = grid.appendRows(b.tab, b.rows);
+          else { firstRows[b.tab] = null; b.rows.forEach(function (a) { grid.append(b.tab, a); }); }
+        });
+      }
       Object.keys(cache).forEach(function (tab) {
         var t = cache[tab];
         var changed = t.pending.length || t.dirty.length;
         if (t.pending.length) {
-          var arrays = t.pending.map(function (r) { return toArray(tab, t.headers, r); });
-          var first = grid.appendRows ? grid.appendRows(tab, arrays) : null;
-          if (first === null || first === undefined) { first = null; arrays.forEach(function (a) { grid.append(tab, a); }); }
-          t.pending.forEach(function (r, i) { r.__row = first === null ? -1 : first + i; });
+          var first = firstRows[tab];
+          t.pending.forEach(function (r, i) { r.__row = first === null || first === undefined ? -1 : first + i; });
           t.pending = [];
         }
         t.dirty.forEach(function (r) { if (r.__row > 0) grid.writeRow(tab, r.__row, toArray(tab, t.headers, r)); });
@@ -152,6 +163,14 @@
         });
         if (row.__row > 0 && t.dirty.indexOf(row) === -1) t.dirty.push(row); // a not-yet-written row is simply written with its new values
         if (!buffer) flush();
+      },
+      /** The last n rows of a tab without reading the whole tab (used for today's thumbnails). */
+      tail: function (tab, n) {
+        var t = entry(tab);
+        if (t.rows) return t.rows.slice(-n);
+        var headers = headersOf(tab), data = grid.tail ? grid.tail(tab, n) : grid.read(tab).slice(1).slice(-n);
+        var out = data.map(function (r) { var o = {}; headers.forEach(function (h, c) { o[h] = decode(tab, h, r[c]); }); return o; });
+        return out.concat(t.pending).slice(-n);
       },
       flush: flush
     };

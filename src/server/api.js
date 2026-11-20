@@ -72,16 +72,26 @@
     checkIn: function (ctx, actor, a) {
       // The check-in photo is taken inside the app (back camera, landscape) and is required.
       if (!a.photo || !a.thumb) throw err('BLOCKED', 'Take the check-in photo first.');
-      if (String(a.photo).length > 900000 || String(a.thumb).length > 120000) throw err('BLOCKED', 'The photo is too large. Please try again.');
+      if (String(a.photo).length > 900000 || String(a.thumb).length > 45000) throw err('BLOCKED', 'The photo is too large. Please try again.');
+      if (ctx.db.rows('Punches').some(function (x) { return x.personId === actor.id && x.date === Core._.today(ctx) && x.kind === 'in'; })) throw err('BLOCKED', 'You have already checked in today.');
       var stamp = Core._.today(ctx) + '_' + actor.id + '_' + ctx.now;
-      var args = { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, photoId: ctx.env.savePhoto(stamp + '.jpg', a.photo), thumbId: ctx.env.savePhoto(stamp + '_thumb.jpg', a.thumb) };
-      return Att.checkIn(ctx, actor, args);
+      // Full photo: private Drive folder. Thumbnail: a small cell in the Thumbs tab (no second Drive file).
+      var thumbId = 't_' + ctx.env.randomId();
+      var args = { lat: a.lat, lng: a.lng, accuracy: a.accuracy, dress: a.dress, photoId: ctx.env.savePhoto(stamp + '.jpg', a.photo), thumbId: thumbId };
+      var result = Att.checkIn(ctx, actor, args);
+      ctx.db.insert('Thumbs', { id: thumbId, personId: actor.id, date: Core._.today(ctx), data: a.thumb });
+      return result;
     },
     photo: function (ctx, actor, a) {
       var p = ctx.db.rows('Punches').filter(function (x) { return x.photoId === a.id || x.thumbId === a.id; })[0];
       if (!p) throw err('NOT_FOUND', 'No such photo.');
       var isThumbToday = p.thumbId === a.id && p.date === Core._.today(ctx);   // "Today at GJ": everyone
       if (!(isThumbToday || actor.role !== 'staff' || p.personId === actor.id)) throw err('FORBIDDEN', 'You cannot see this photo.');
+      if (p.thumbId === a.id) {
+        var th = ctx.db.tail('Thumbs', 80).filter(function (x) { return x.id === a.id; })[0]; // recent thumbnails only
+        if (th) return { data: th.data };
+        return { data: ctx.env.readPhoto(p.photoId) }; // older than the recent rows: fall back to the photo itself
+      }
       return { data: ctx.env.readPhoto(a.id) };
     },
     decideDress: function (ctx, actor, a) { return Att.decideDress(ctx, actor, a.id, !!a.confirm, Admin.recordIncident); },
