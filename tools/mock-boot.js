@@ -32,6 +32,7 @@
       pinSalt: 's', pinHash: env.sha256('s:1234'), pinTries: 0, pinLockedUntil: 0 });
     if (p[2] === 'staff') db.insert('PayInfo', { personId: id, fixedSalary: 17000, targetAllowance: 2000, disciplineBonus: 500, dutyHours: 9 }); // sample figure from the handoff example
   });
+  root.GJClash.DEFAULT_RULES.forEach(function (r) { db.insert('Rules', r); }); // as setupOrUpgrade seeds them
   root.GJMock = {
     data: data,
     handle: function (request) { return JSON.parse(JSON.stringify(root.GJApi.handle({ db: db, now: Date.now(), env: env }, request))); },

@@ -26,6 +26,7 @@
       v.reasonCode = r.reasonCode; v.reasonText = r.reasonText; v.submittedAt = r.submittedAt; v.route = r.route;
       v.approvals = r.approvals; v.decisionReason = r.decisionReason; v.enteredBy = r.enteredBy ? names[r.enteredBy] : '';
       v.history = r.history; v.run = r.run; v.noticeHours = r.noticeHours;
+      if (r.route === 'special' && /^Special/.test(r.status)) v.waitingFor = [r.approvals.aakash === 'yes' ? '' : 'Aakash', r.approvals.varun === 'yes' ? '' : 'Varun'].filter(Boolean).join(' and ');
     }
     return v;
   }
@@ -94,6 +95,9 @@
     decideDress: function (ctx, actor, a) { return Att.decideDress(ctx, actor, a.id, !!a.confirm, Admin.recordIncident); },
     manualCheckIn: function (ctx, actor, a) { return Att.manualCheckIn(ctx, actor, a); },
     manualCheckOut: function (ctx, actor, a) { return Att.manualCheckOut(ctx, actor, a); },
+    undoCheckOut: function (ctx, actor, a) { return Att.undoCheckOut(ctx, actor, a); },
+    cancelShort: function (ctx, actor, a) { return Att.cancelShort(ctx, actor, a.id); },
+    keepAbsent: function (ctx, actor, a) { return Att.keepAbsent(ctx, actor, a.id); },
     checkOut: function (ctx, actor) { return Att.checkOut(ctx, actor); },
     goingOut: function (ctx, actor, a) { return Att.goingOut(ctx, actor, a); },
     decideOuting: function (ctx, actor, a) { return Att.decideOuting(ctx, actor, a.id, !!a.approve, a.reason); },
@@ -105,25 +109,34 @@
       // A staff member sees only their own month. Aakash and Varun may open anyone's.
       var personId = a.personId || actor.id;
       if (personId !== actor.id && actor.role === 'staff') throw err('FORBIDDEN', 'You can see only your own page.');
-      return Att.myMonth(ctx, personId, a.month);
+      var m = Att.myMonth(ctx, personId, a.month), items = {};
+      Admin.graceTable(ctx).forEach(function (g) { items['manual:' + g.key] = g.item; });
+      // A violation is shown with its plain name and, when Aakash recorded it, his note: the person must know what to dispute.
+      m.violations = (m.violations || []).map(function (v) { return Object.assign({}, v, { label: items[v.rule] ? 'Recorded by Aakash: ' + items[v.rule] : Core._.ruleLabel(v.rule) }); });
+      return m;
     },
     today: function (ctx, actor) {
       var date = Core._.today(ctx);
-      var mine = function (tab) { return ctx.db.rows(tab).filter(function (r) { return r.personId === actor.id && r.date === date; }); };
+      var mine = function (tab, later) { return ctx.db.rows(tab).filter(function (r) { return r.personId === actor.id && (later ? r.date >= date : r.date === date); }); };
       var punches = mine('Punches');
       var pick = function (kind) { var p = punches.filter(function (x) { return x.kind === kind; })[0]; return p ? { at: p.at, flag: p.flag } : null; };
       var outing = mine('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Approved' || o.status === 'Back'; })[0];
       return { date: date, serverTime: ctx.now, hints: Att.hints(ctx, actor.id), checkIn: pick('in'), checkOut: pick('out'),
         outing: outing ? { id: outing.id, status: outing.status, reason: outing.reason, approvedAt: outing.approvedAt, backAt: outing.backAt, minutes: outing.minutes } : null,
-        shorts: mine('ShortRequests').filter(function (q) { return q.status === 'Pending' || q.status === 'Approved' || q.status === 'Rejected'; })
-          .map(function (q) { return { id: q.id, kind: q.kind, time: q.time, status: q.status, decisionReason: q.decisionReason }; }) };
+        // Today's and all coming late / early requests, so one sent for another day does not vanish from sight.
+        shorts: mine('ShortRequests', true).filter(function (q) { return q.status === 'Pending' || q.status === 'Approved' || (q.status === 'Rejected' && q.date === date); })
+          .map(function (q) { return { id: q.id, date: q.date, kind: q.kind, time: q.time, status: q.status, decisionReason: q.decisionReason }; }) };
     },
     approvals: function (ctx, actor) {
       if (actor.role === 'staff') throw err('FORBIDDEN', 'Only Aakash or Varun.');
       var names = nameMap(ctx);
       var out = {
-        leaves: ctx.db.rows('LeaveRequests').filter(function (r) { return /^(Pending|Special)/.test(r.status); }).map(function (r) { return Object.assign(leaveView(r, names, actor), { context: Views.pendingContext(ctx, r) }); }),
-        absences: ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Absent \u2013 unannounced'; }).map(function (r) { return { id: r.id, name: names[r.personId], dates: r.dates }; }),
+        leaves: ctx.db.rows('LeaveRequests').filter(function (r) {
+          if (!/^(Pending|Special)/.test(r.status)) return false;
+          // A special request this approver has already said yes to waits for the other one, not for him.
+          return !(r.route === 'special' && r.approvals[actor.role === 'owner' ? 'varun' : 'aakash'] === 'yes');
+        }).map(function (r) { return Object.assign(leaveView(r, names, actor), { context: Views.pendingContext(ctx, r) }); }),
+        absences: ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Absent \u2013 unannounced' && r.decidedBy === 'system'; }).map(function (r) { return { id: r.id, name: names[r.personId], dates: r.dates }; }),
         outings: ctx.db.rows('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Back'; }).map(function (o) {
           return { id: o.id, name: names[o.personId], status: o.status, reason: o.reason, expectedMinutes: o.expectedMinutes, requestedAt: o.requestedAt, approvedAt: o.approvedAt, backAt: o.backAt, minutes: o.minutes };
         }),

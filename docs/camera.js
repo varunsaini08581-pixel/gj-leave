@@ -52,6 +52,13 @@
       function landscape() { return video.videoWidth > video.videoHeight; }
       function refresh() {
         var ok = landscape();
+        // The guide and the outline sit on the picture itself, not on the black bars beside it.
+        var vr = video.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+        if (vr.width > 0 && vr.height > 0) {
+          var x = vr.left - sr.left, y = vr.top - sr.top;
+          guide.style.cssText += ';inset:auto;left:' + (x + vr.width * 0.04) + 'px;top:' + (y + vr.height * 0.05) + 'px;width:' + (vr.width * 0.92 - 4) + 'px;height:' + (vr.height * 0.90 - 4) + 'px';
+          figure.style.cssText += ';transform:none;bottom:auto;left:' + (x + vr.width * 0.43) + 'px;top:' + (y + vr.height * 0.12) + 'px;width:' + (vr.width * 0.14) + 'px;height:' + (vr.height * 0.80) + 'px';
+        }
         shoot.disabled = !ok; shoot.style.opacity = ok ? '1' : '.45';
         hint.textContent = ok ? 'Whole shop in the frame. ' + opts.name + ' standing inside the outline, head to toe. Photo taken by another person or the tripod.'
           : 'Turn the phone sideways (landscape). A portrait photo is not accepted.';

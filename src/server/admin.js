@@ -144,8 +144,8 @@
       ctx.db.update('LeaveRequests', id, patch);
       // The violations of the old version stand until the new version is decided (granted now, or by Aakash later).
       if (patch.status === 'Approved' || patch.status === 'Recorded') { H.withdrawViolations(ctx, id, 'Request edited'); H.onGranted(ctx, Object.assign({}, r, patch)); }
-      if (ev.decision === 'aakash' || ev.decision === 'special') H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'approval', 'Leave request edited', person.name + ': ' + ev.dates.join(', '), id); });
-      if (ev.decision === 'varun' || ev.decision === 'special') H.byRole(ctx, 'owner').forEach(function (o) { H.notify(ctx, o.id, 'approval', 'Leave request edited', person.name + ': ' + ev.dates.join(', '), id); });
+      if (ev.decision === 'aakash' || ev.decision === 'special') H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'approval', 'Leave request edited', person.name + ': ' + H.niceDates(ev.dates), id); });
+      if (ev.decision === 'varun' || ev.decision === 'special') H.byRole(ctx, 'owner').forEach(function (o) { H.notify(ctx, o.id, 'approval', 'Leave request edited', person.name + ': ' + H.niceDates(ev.dates), id); });
       H.audit(ctx, actor.id, 'leave.edit', id, { status: patch.status });
       return { id: id, status: patch.status, warnings: ev.warnings };
     });
@@ -175,8 +175,8 @@
         override: String(input.overrideReason).trim() };
       ctx.db.insert('LeaveRequests', row);
       H.audit(ctx, actor.id, 'leave.override', row.id, { reason: row.override, dates: dates });
-      H.notify(ctx, person.id, 'decision', 'Leave: Approved', dates.join(', '), row.id);
-      H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'override', 'Override by Varun', person.name + ': ' + dates.join(', '), row.id); });
+      H.notify(ctx, person.id, 'decision', 'Leave: Approved', H.niceDates(dates), row.id);
+      H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'override', 'Override by Varun', person.name + ': ' + H.niceDates(dates), row.id); });
       return { id: row.id, status: 'Approved' };
     });
   }

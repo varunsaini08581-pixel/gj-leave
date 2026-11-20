@@ -2,9 +2,17 @@
 (function () {
   'use strict';
   var A = window.GJApp, h = A.h, api = A.api, run = A.run, button = A.button, show = A.show, toast = A.toast, V = A.VIEWS, state = A.state;
-  function open(name, arg) { state.tab = 'more'; A.drawTabs(); show(h('p', { class: 'muted' }, 'Loading…')); V[name](arg); }
+  function open(name, arg, fromHistory) {
+    state.tab = 'more'; state.gen += 1; A.drawTabs();
+    show(h('p', { class: 'muted' }, 'Loading…')); state.sub = name; state.loading = true;
+    state.reload = function () { open(name, arg, true); };
+    if (!fromHistory) { try { history.pushState({ tab: 'more', sub: name, arg: typeof arg === 'string' ? arg : undefined }, ''); } catch (e) { /* fine */ } }
+    V[name](arg);
+  }
+  window.GJOpen = open;
+  var fieldNo = 0;
   function back() { return button('‹ Back', 'small', function () { A.go('more'); }); }
-  function field(label, el) { return h('div', {}, [h('label', {}, label), el]); }
+  function field(label, el) { var id = el.id || ('f' + (++fieldNo)); try { el.id = id; } catch (e) { /* fine */ } return h('div', {}, [h('label', { for: id }, label), el]); }
   function dur(m) { return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min'; }
   function month() { return A.todayStr().slice(0, 7); }
   function prevMonth(m) { var y = +m.slice(0, 4), n = +m.slice(5) - 1; if (n < 1) { n = 12; y -= 1; } return y + '-' + (n < 10 ? '0' + n : n); }
@@ -62,7 +70,7 @@
   V.notes = function () {
     run(api('notifications')).then(function (list) {
       show([back(), h('h1', {}, 'Notifications'), h('div', { class: 'card' }, list.length ? h('ul', { class: 'list' }, list.slice().reverse().map(function (n) {
-        return h('li', {}, [h('strong', {}, n.title), n.body ? h('div', { class: 'muted', style: 'white-space:pre-line' }, n.body) : null, h('div', { class: 'muted' }, A.timeOf(n.createdAt))]);
+        return h('li', {}, [h('strong', {}, n.title), n.body ? h('div', { class: 'muted', style: 'white-space:pre-line' }, n.body) : null, h('div', { class: 'muted' }, A.whenOf(n.createdAt))]);
       })) : h('p', { class: 'muted' }, 'Nothing yet.'))]);
     }).catch(function () {});
   };
@@ -102,7 +110,11 @@
       show([back(), h('h1', {}, 'Enter a forgotten check-out'), h('p', { class: 'sub' }, 'When someone left without checking out. It is labelled "entered by ' + state.me.name + '".'),
         h('div', { class: 'card' }, [field('Staff member', who), field('Date', date), field('Time the person left', time), field('Reason', why), h('div', { class: 'btns' }, button('Save check-out', 'primary', function () {
           return run(api('manualCheckOut', { personId: who.value, date: date.value, time: time.value, reason: why.value })).then(function (r) { out.replaceChildren(h('div', { class: 'result green' }, 'Saved. ' + (r.earlyMinutes > 0 ? r.earlyMinutes + ' min before duty end.' : 'After duty end.'))); });
-        })), out])]);
+        })), out]),
+        h('div', { class: 'card' }, [h('h2', {}, 'Take back a wrong check-out'), h('p', { class: 'muted' }, 'When someone tapped Check out by mistake. The person is checked in again; the minutes counted for that check-out are removed. Uses the staff member, date and reason above.'),
+          h('div', { class: 'btns' }, A.confirmButton('Take back the check-out', '', 'Tap again to take back this check-out', function () {
+            return run(api('undoCheckOut', { personId: who.value, date: date.value, reason: why.value }), 'Check-out taken back.');
+          }))])]);
     }).catch(function () {});
   };
 
@@ -132,7 +144,7 @@
         h('div', { class: 'card' }, live.length ? h('ul', { class: 'list' }, live.map(function (d) {
           return h('li', {}, [h('div', { class: 'row' }, [h('strong', {}, d.name), h('span', { class: 'chip ' + (d.status === 'approved' ? 'green' : 'amber') }, d.status === 'approved' ? 'Approved' : 'Waiting')]),
             h('div', { class: 'muted' }, (d.label || 'Phone') + ' · asked ' + A.niceDate(new Date(d.requestedAt + 19800000).toISOString().slice(0, 10))),
-            d.status === 'approved' ? h('div', { class: 'btns' }, button('Remove this phone', 'danger', function () { return run(api('decideDevice', { id: d.id, approve: false }), 'Phone removed.').then(V.phones); })) : null]);
+            d.status === 'approved' ? h('div', { class: 'btns' }, A.confirmButton('Remove this phone', 'danger', 'Tap again: ' + d.name + ' will not be able to use this phone', function () { return run(api('decideDevice', { id: d.id, approve: false }), 'Phone removed.').then(V.phones); })) : null]);
         })) : h('p', { class: 'muted' }, 'No phones yet.'))]);
     }).catch(function () {});
   };
@@ -166,7 +178,7 @@
       var rows = c.days.map(function (d) {
         var names = d.entries.map(function (e) { return e.name + (e.kind === 'roster' ? ' (roster)' : e.kind === 'half' ? ' (half)' : '') + (e.status && e.status !== 'Approved' && e.status !== 'Recorded' ? ' [' + e.status + ']' : ''); });
         var li = h('li', { style: d.risk.length ? 'background:#fde8e8;margin:0 -8px;padding:10px 8px;border-radius:8px' : '' }, [
-          h('div', { class: 'row' }, [h('strong', {}, A.niceDate(d.date) + (d.sunday ? ' · Sunday ' + d.sunday : '')), d.risk.length ? h('span', { class: 'chip red' }, 'Clash risk: ' + d.risk.join(', ')) : null]),
+          h('div', { class: 'row' }, [h('strong', {}, A.niceDate(d.date) + (d.sunday ? ' · Sunday ' + d.sunday : '')), d.risk.length ? h('span', { class: 'chip red wrap' }, 'Clash risk: ' + d.risk.join(', ')) : null]),
           names.length ? h('div', { class: 'muted' }, names.join(', ')) : null]);
         d.restrictions.forEach(function (r) { li.appendChild(h('div', { class: 'chip amber', style: 'margin-top:4px' }, 'Restricted: ' + r.note)); });
         return li;
@@ -185,7 +197,7 @@
           h('p', { class: 'muted' }, 'Leaves ' + p.leaves.total + ' / ' + p.leaves.free + ' · Emergencies ' + p.leaves.emergencies + ' · Bank used ' + p.bank.used + ' min' + (p.bank.beyond ? ' (+' + p.bank.beyond + ' beyond)' : '')),
           p.wouldBeDeducted ? h('p', {}, (p.onPayroll ? 'Would be deducted (estimate): Rs ' : 'If on payroll: Rs ') + p.wouldBeDeducted.total) : null,
           p.wouldBeDeducted && p.wouldBeDeducted.lines.length ? h('ul', { class: 'list' }, p.wouldBeDeducted.lines.map(function (l) { return h('li', { class: 'muted' }, l); })) : null,
-          r.locked ? null : button('Open ' + p.name + '’s month', 'small', function () { state.tab = 'month'; A.drawTabs(); V.month(p.personId); })]));
+          r.locked ? null : button('Open ' + p.name + '’s month', 'small', function () { A.go('month', { personId: p.personId, month: m, back: function () { open('report', m); } }); })]));
       });
       if (r.overrides.length) cards.push(h('div', { class: 'card' }, [h('h2', {}, 'Overrides by Varun'), h('ul', { class: 'list' }, r.overrides.map(function (o) { return h('li', {}, o.personId + ': ' + o.dates.join(', ') + ' — ' + o.reason); }))]));
       if (r.locked) {
@@ -210,7 +222,7 @@
     run(api('restrictions')).then(function (d) {
       var from = h('input', { type: 'date' }), to = h('input', { type: 'date' }), note = h('input', { placeholder: 'For example: Peak sales season', maxlength: 80 });
       var rule = h('select', {}, [h('option', { value: 'no-leave' }, 'No leave'), h('option', { value: 'violation' }, 'Leave allowed, counts as 1 violation')]);
-      var ticks = d.people.map(function (n) { var cb = h('input', { type: 'checkbox', style: 'width:auto;min-height:0;margin-right:8px' }); cb.checked = n !== 'Anita' && n !== 'Muskan'; return { name: n, cb: cb }; });
+      var ticks = d.people.map(function (n) { var cb = h('input', { type: 'checkbox', class: 'tick' }); cb.checked = n !== 'Anita' && n !== 'Muskan'; return { name: n, cb: cb }; });
       var cards = [back(), h('h1', {}, 'Restrictions'), h('p', { class: 'sub' }, 'Blackout dates. They show on the apply form before dates are picked.')];
       cards.push(h('div', { class: 'card' }, [h('h2', {}, 'New restriction'), field('From', from), field('To', to), field('Note', note), field('Rule', rule), h('label', {}, 'Applies to'),
         h('div', {}, ticks.map(function (t) { return h('label', { style: 'font-weight:400;margin:6px 0' }, [t.cb, t.name]); })),
@@ -235,7 +247,13 @@
         function next() {
           return A.position().then(function (p) { if (p.lat !== undefined) samples.push(p); out.replaceChildren(h('p', { class: 'muted' }, 'Reading ' + (++i) + ' of 5…')); if (i < 5) return new Promise(function (ok) { setTimeout(ok, 1200); }).then(next); });
         }
-        return next().then(function () { return run(api('setShopPoint', { samples: samples })); }).then(function (r) {
+        return next().then(function () {
+          if (!samples.length) {
+            out.replaceChildren(h('div', { class: 'warn' }, 'This phone did not give its location. Allow Location for this app (phone Settings, or the lock icon in the address bar), switch on GPS, and try again.'));
+            var e = new Error('Location is switched off or not allowed on this phone.'); e.code = 'BLOCKED'; A.toast(e.message, true); throw e;
+          }
+          return run(api('setShopPoint', { samples: samples }));
+        }).then(function (r) {
           out.replaceChildren(h('div', { class: 'result green' }, 'Saved: ' + r.lat.toFixed(5) + ', ' + r.lng.toFixed(5) + ' (' + samples.length + ' readings).'));
         });
       }), out, h('p', { class: 'muted', style: 'margin-top:10px' }, 'Indoor phone location can be off by 20–100 m. The check-in photo is the stronger proof.')])]);
@@ -275,7 +293,7 @@
     var ds = h('input', { type: 'time', value: p.dutyStart }), de = h('input', { type: 'time', value: p.dutyEnd }), email = h('input', { type: 'email', value: p.email || '', placeholder: 'For email alerts (optional)' }), phone = h('input', { value: p.phone || '', inputmode: 'numeric' });
     var sun = h('select', {}, [['[1,2]', '1st and 2nd Sunday'], ['[3,4]', '3rd and 4th Sunday'], ['[]', 'No Sunday off'], ['"every"', 'Every Sunday']].map(function (o) { return h('option', { value: o[0] }, o[1]); }));
     role.value = p.role; sun.value = JSON.stringify(p.sundayOff);
-    function tick(label, key) { var cb = h('input', { type: 'checkbox', style: 'width:auto;min-height:0;margin-right:8px' }); cb.checked = key === 'active' ? p.active !== false : !!p[key]; return { key: key, cb: cb, el: h('label', { style: 'font-weight:400;margin:6px 0' }, [cb, label]) }; }
+    function tick(label, key) { var cb = h('input', { type: 'checkbox', class: 'tick' }); cb.checked = key === 'active' ? p.active !== false : !!p[key]; return { key: key, cb: cb, el: h('label', { style: 'font-weight:400;margin:6px 0' }, [cb, label]) }; }
     var ticks = [tick('Active', 'active'), tick('No approval needed (recorded only)', 'noApproval'), tick('Clash rules do not block this person', 'noClash'), tick('Not on payroll (no quota or deduction)', 'noQuota'), tick('Exempt from the dress check', 'dressExempt')];
     show([button('‹ Back', 'small', function () { open('people'); }), h('h1', {}, p.id ? 'Edit ' + p.name : 'New person'),
       h('div', { class: 'card' }, [field('Name', name), field('Group', group), field('Role', role), field('Duty start', ds), field('Duty end', de), field('Sunday off', sun), field('Email', email), field('Phone', phone)].concat(ticks.map(function (t) { return t.el; })).concat([

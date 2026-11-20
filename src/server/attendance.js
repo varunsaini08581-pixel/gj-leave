@@ -288,6 +288,54 @@
     });
   }
 
+  /**
+   * A check-out tapped by mistake: Aakash takes it back, with a reason. Nothing is deleted: the
+   * check-out is kept as "void", its minutes are set to 0, and the person can check out again.
+   */
+  function undoCheckOut(ctx, actor, a) {
+    return ctx.env.withLock(function () {
+      boss(actor);
+      var date = a.date || H.today(ctx);
+      if (!Cal.isDate(date) || date > H.today(ctx)) H.fail('BLOCKED', 'Pick the date.');
+      H.assertOpen(ctx, date);
+      if (!String(a.reason || '').trim()) H.fail('REASON', 'Write why the check-out is taken back.');
+      var out = punchesToday(ctx, a.personId, date, 'out')[0];
+      if (!out) H.fail('NOT_FOUND', 'There is no check-out on that day.');
+      ctx.db.update('Punches', out.id, { kind: 'out-void', note: 'Taken back by ' + actor.name + ': ' + String(a.reason).trim() });
+      ctx.db.rows('DayMinutes').forEach(function (m) { if (m.source === out.id && m.minutes > 0) ctx.db.update('DayMinutes', m.id, { minutes: 0, note: 'Check-out taken back by ' + actor.name }); });
+      syncViolations(ctx, a.personId, Cal.monthKey(date));
+      H.audit(ctx, actor.id, 'punch.undo-out', out.id, { personId: a.personId, date: date, reason: a.reason });
+      H.notify(ctx, a.personId, 'decision', 'Check-out taken back', niceDay(date) + ': you are checked in again. Check out when you leave.', out.id);
+      return { id: out.id };
+    });
+  }
+
+  /** The person withdraws a late / early request before it takes effect. */
+  function cancelShort(ctx, actor, id) {
+    return ctx.env.withLock(function () {
+      var q = H.find(ctx, 'ShortRequests', id), today = H.today(ctx);
+      if (!q || q.personId !== actor.id || (q.status !== 'Pending' && q.status !== 'Approved')) H.fail('NOT_FOUND', 'Nothing to cancel.');
+      var used = q.date < today || (q.date === today && punchesToday(ctx, actor.id, today, q.kind === 'late' ? 'in' : 'out').length > 0);
+      if (used) H.fail('BLOCKED', 'This request has already been used.');
+      ctx.db.update('ShortRequests', id, { status: 'Cancelled', decisionReason: 'Cancelled by ' + actor.name });
+      H.audit(ctx, actor.id, 'short.cancel', id);
+      H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'approval', actor.name + ' cancelled a ' + (q.kind === 'late' ? 'late arrival' : 'early leaving') + ' request', niceDay(q.date) + ', ' + q.time, id); });
+      return { id: id, status: 'Cancelled' };
+    });
+  }
+
+  /** Aakash has looked at an automatic absence and leaves it as it is: it no longer waits in Approvals. */
+  function keepAbsent(ctx, actor, id) {
+    return ctx.env.withLock(function () {
+      boss(actor);
+      var r = H.find(ctx, 'LeaveRequests', id);
+      if (!r || r.status !== H.ABSENT) H.fail('NOT_FOUND', 'Not an unannounced absence.');
+      ctx.db.update('LeaveRequests', id, { decidedBy: actor.id, decidedAt: ctx.now, decisionReason: 'Kept as absent', history: r.history.concat([{ at: ctx.now, by: actor.id, action: 'kept as absent' }]) });
+      H.audit(ctx, actor.id, 'absent.keep', id);
+      return { id: id };
+    });
+  }
+
   // ---------- Going out (owner's flow, handoff 3.8) ----------
 
   function goingOut(ctx, actor, a) {
@@ -539,7 +587,7 @@
         var n = ctx.db.rows('Violations').filter(function (v) { return v.personId === personId && Cal.monthKey(v.date) === key && v.disputeState !== 'removed'; }).length;
         return { month: key, violations: n, stage: Minutes.ladder(n).notice ? 'notice' : n >= 2 ? 'bonus and allowance' : n === 1 ? 'record only' : 'none' };
       }),
-      violations: violations.map(function (v) { return { id: v.id, date: v.date, rule: v.rule, source: v.source, disputeState: v.disputeState, createdAt: v.createdAt }; }),
+      violations: violations.map(function (v) { return { id: v.id, date: v.date, rule: v.rule, source: v.source, note: v.source === 'manual' ? v.note : '', disputeState: v.disputeState, createdAt: v.createdAt }; }),
       ladder: ladder,
       wouldBeDeducted: salary ? { lines: lines, total: quota.wouldBeDeducted + mm.run.wouldBeDeducted,
         label: 'Estimate as per company rules. Final salary is decided by management.' } : null
@@ -645,7 +693,7 @@
   }
 
   var api = { requestShort: requestShort, decideShort: decideShort, checkIn: checkIn, checkOut: checkOut, goingOut: goingOut, decideOuting: decideOuting,
-    imBack: imBack, confirmBack: confirmBack, manualCheckOut: manualCheckOut, expectedDay: expectedDay, uncovered: uncovered, decideDress: decideDress, manualCheckIn: manualCheckIn, effectOf: effectOf, hints: hints, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, liveMonth: liveMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
+    imBack: imBack, confirmBack: confirmBack, manualCheckOut: manualCheckOut, undoCheckOut: undoCheckOut, cancelShort: cancelShort, keepAbsent: keepAbsent, expectedDay: expectedDay, uncovered: uncovered, decideDress: decideDress, manualCheckIn: manualCheckIn, effectOf: effectOf, hints: hints, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, liveMonth: liveMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
     syncViolations: syncViolations };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJAttendance = api;

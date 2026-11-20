@@ -63,7 +63,7 @@
       var who = [];
       if (r.route === 'aakash' || (r.route === 'special' && r.approvals.aakash !== 'yes')) who = who.concat(H.byRole(ctx, 'manager'));
       if (r.route === 'varun' || (r.route === 'special' && r.approvals.varun !== 'yes')) who = who.concat(H.byRole(ctx, 'owner'));
-      who.forEach(function (m) { H.notify(ctx, m.id, 'reminder', 'Reminder: leave request waiting', names[r.personId] + ': ' + r.dates.join(', '), r.id); });
+      who.forEach(function (m) { H.notify(ctx, m.id, 'reminder', 'Reminder: leave request waiting', names[r.personId] + ': ' + H.niceDates(r.dates), r.id); });
       ctx.db.update('LeaveRequests', r.id, { remindedAt: ctx.now });
       n += 1;
     });
@@ -107,7 +107,7 @@
   function eveningBefore(ctx) {
     var tomorrow = Cal.addDays(H.today(ctx), 1), n = 0;
     ctx.db.rows('LeaveRequests').forEach(function (r) {
-      if (r.status === 'Approved' && r.dates[0] === tomorrow) n += once(ctx, r.personId, 'leave-tomorrow', r.id, 'Your leave starts tomorrow', r.dates.join(', ') + (r.kind === 'half' ? ' (half day from ' + r.halfStart + ')' : '')) ? 1 : 0;
+      if (r.status === 'Approved' && r.dates[0] === tomorrow) n += once(ctx, r.personId, 'leave-tomorrow', r.id, 'Your leave starts tomorrow', H.niceDates(r.dates) + (r.kind === 'half' ? ' (half day from ' + r.halfStart + ')' : '')) ? 1 : 0;
     });
     return n;
   }

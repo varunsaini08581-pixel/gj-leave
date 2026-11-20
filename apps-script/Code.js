@@ -1106,6 +1106,13 @@
   function notify(ctx, to, kind, title, body, ref) {
     ctx.db.insert('Notifications', { id: ctx.env.randomId(), to: to, kind: kind, title: title, body: body, ref: ref || '', createdAt: ctx.now, readAt: '', emailedAt: '' });
   }
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  /** "25 Nov" or "7 Dec – 10 Dec (4 days)" for alerts and e-mails. */
+  function niceDates(dates) {
+    var one = function (d) { return (+d.slice(8)) + ' ' + MONTHS[+d.slice(5, 7) - 1]; };
+    if (!dates || !dates.length) return '';
+    return dates.length === 1 ? one(dates[0]) : one(dates[0]) + ' \u2013 ' + one(dates[dates.length - 1]) + ' (' + dates.length + ' days)';
+  }
   function byRole(ctx, role) { return ctx.db.rows('People').filter(function (p) { return p.role === role && p.active !== false; }); }
   function toMs(date, hhmm) {
     var d = date.split('-'), t = hhmm.split(':');
@@ -1487,9 +1494,9 @@
       ctx.db.insert('LeaveRequests', row);
       audit(ctx, actor.id, 'leave.submit', row.id, { status: row.status });
       if (row.status === 'Approved' || row.status === 'Recorded') onGranted(ctx, row);
-      if (row.route === 'aakash' || row.route === 'special') byRole(ctx, 'manager').forEach(function (m) { notify(ctx, m.id, 'approval', 'Leave request', person.name + ': ' + ev.dates.join(', '), row.id); });
-      if (row.route === 'varun' || row.route === 'special') byRole(ctx, 'owner').forEach(function (o) { notify(ctx, o.id, 'approval', row.route === 'special' ? 'Special approval' : 'Leave request', person.name + ': ' + ev.dates.join(', '), row.id); });
-      notify(ctx, personId, 'decision', 'Leave: ' + row.status, ev.dates.join(', '), row.id);
+      if (row.route === 'aakash' || row.route === 'special') byRole(ctx, 'manager').forEach(function (m) { notify(ctx, m.id, 'approval', 'Leave request', person.name + ': ' + niceDates(ev.dates), row.id); });
+      if (row.route === 'varun' || row.route === 'special') byRole(ctx, 'owner').forEach(function (o) { notify(ctx, o.id, 'approval', row.route === 'special' ? 'Special approval' : 'Leave request', person.name + ': ' + niceDates(ev.dates), row.id); });
+      notify(ctx, personId, 'decision', 'Leave: ' + row.status, niceDates(ev.dates), row.id);
       return { id: row.id, status: row.status, warnings: ev.warnings };
     });
   }
@@ -1513,7 +1520,7 @@
       function finish(status, why) {
         ctx.db.update('LeaveRequests', id, { status: status, decidedAt: ctx.now, decidedBy: actor.id, decisionReason: why || '', history: hist });
         audit(ctx, actor.id, 'leave.decide', id, { status: status });
-        notify(ctx, r.personId, 'decision', 'Leave: ' + status, r.dates.join(', ') + (why ? ' — ' + why : ''), id);
+        notify(ctx, r.personId, 'decision', 'Leave: ' + status, niceDates(r.dates) + (why ? ' — ' + why : ''), id);
         // An edited request kept the violations of its old version until this decision.
         if (status === 'Approved' || status === 'Rejected') withdrawViolations(ctx, id, 'Request decided again after an edit');
         if (status === 'Approved') onGranted(ctx, Object.assign({}, r, { status: status }));
@@ -1555,7 +1562,7 @@
         var holders = {}; clash.blocks.forEach(function (b) { (b.who || []).forEach(function (w) { holders[w] = b.date; }); });
         Object.keys(holders).forEach(function (name) {
           var h = peopleMap(ctx)[name];
-          if (h) notify(ctx, h.id, 'clash', 'A clashing request was rejected', person.name + ' asked for ' + r.dates.join(', ') + '. Your approved time off keeps the slot.', id);
+          if (h) notify(ctx, h.id, 'clash', 'A clashing request was rejected', person.name + ' asked for ' + niceDates(r.dates) + '. Your approved time off keeps the slot.', id);
         });
         return res;
       }
@@ -1578,14 +1585,14 @@
       ctx.db.update('LeaveRequests', id, { status: 'Cancelled', history: r.history.concat([{ at: ctx.now, by: actor.id, action: 'cancelled', reason: reason || '' }]) });
       if (!started) withdrawViolations(ctx, id, 'Request cancelled before it started');
       audit(ctx, actor.id, 'leave.cancel', id, { reason: reason || '' });
-      if (actor.id !== r.personId) notify(ctx, r.personId, 'decision', 'Leave cancelled', r.dates.join(', ') + ' — ' + reason, id);
+      if (actor.id !== r.personId) notify(ctx, r.personId, 'decision', 'Leave cancelled', niceDates(r.dates) + ' — ' + reason, id);
       return { id: id, status: 'Cancelled' };
     });
   }
 
   var api = { REASONS: REASONS, setPin: setPin, login: login, decideDevice: decideDevice, authenticate: authenticate,
     signOut: signOut, previewLeave: previewLeave, submitLeave: submitLeave, decideLeave: decideLeave, cancelLeave: cancelLeave, toMs: toMs,
-    _: { hooks: hooks, lockedMonths: lockedMonths, assertOpen: assertOpen, stamp: stamp, fail: fail, failKeep: failKeep, closedSet: closedSet, autoDays: autoDays, markAbsent: markAbsent, hasCheckIn: hasCheckIn, dayOver: dayOver,
+    _: { niceDates: niceDates, hooks: hooks, lockedMonths: lockedMonths, assertOpen: assertOpen, stamp: stamp, fail: fail, failKeep: failKeep, closedSet: closedSet, autoDays: autoDays, markAbsent: markAbsent, hasCheckIn: hasCheckIn, dayOver: dayOver,
       withdrawViolations: withdrawViolations, GRANTED: GRANTED, ABSENT: ABSENT, HALF_DAY_MINUTES: HALF_DAY_MINUTES, settingValue: settingValue, hhmmToMin: hhmmToMin, find: find, audit: audit, notify: notify, byRole: byRole, today: today, peopleMap: peopleMap, rules: rules,
       approvedAway: approvedAway, liveLeaves: liveLeaves, IST_OFFSET_MS: IST_OFFSET_MS,
       evaluate: evaluate, onGranted: onGranted, ruleLabel: ruleLabel, STATUS_FOR: STATUS_FOR, OPEN: OPEN } };
@@ -1884,6 +1891,54 @@
     });
   }
 
+  /**
+   * A check-out tapped by mistake: Aakash takes it back, with a reason. Nothing is deleted: the
+   * check-out is kept as "void", its minutes are set to 0, and the person can check out again.
+   */
+  function undoCheckOut(ctx, actor, a) {
+    return ctx.env.withLock(function () {
+      boss(actor);
+      var date = a.date || H.today(ctx);
+      if (!Cal.isDate(date) || date > H.today(ctx)) H.fail('BLOCKED', 'Pick the date.');
+      H.assertOpen(ctx, date);
+      if (!String(a.reason || '').trim()) H.fail('REASON', 'Write why the check-out is taken back.');
+      var out = punchesToday(ctx, a.personId, date, 'out')[0];
+      if (!out) H.fail('NOT_FOUND', 'There is no check-out on that day.');
+      ctx.db.update('Punches', out.id, { kind: 'out-void', note: 'Taken back by ' + actor.name + ': ' + String(a.reason).trim() });
+      ctx.db.rows('DayMinutes').forEach(function (m) { if (m.source === out.id && m.minutes > 0) ctx.db.update('DayMinutes', m.id, { minutes: 0, note: 'Check-out taken back by ' + actor.name }); });
+      syncViolations(ctx, a.personId, Cal.monthKey(date));
+      H.audit(ctx, actor.id, 'punch.undo-out', out.id, { personId: a.personId, date: date, reason: a.reason });
+      H.notify(ctx, a.personId, 'decision', 'Check-out taken back', niceDay(date) + ': you are checked in again. Check out when you leave.', out.id);
+      return { id: out.id };
+    });
+  }
+
+  /** The person withdraws a late / early request before it takes effect. */
+  function cancelShort(ctx, actor, id) {
+    return ctx.env.withLock(function () {
+      var q = H.find(ctx, 'ShortRequests', id), today = H.today(ctx);
+      if (!q || q.personId !== actor.id || (q.status !== 'Pending' && q.status !== 'Approved')) H.fail('NOT_FOUND', 'Nothing to cancel.');
+      var used = q.date < today || (q.date === today && punchesToday(ctx, actor.id, today, q.kind === 'late' ? 'in' : 'out').length > 0);
+      if (used) H.fail('BLOCKED', 'This request has already been used.');
+      ctx.db.update('ShortRequests', id, { status: 'Cancelled', decisionReason: 'Cancelled by ' + actor.name });
+      H.audit(ctx, actor.id, 'short.cancel', id);
+      H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'approval', actor.name + ' cancelled a ' + (q.kind === 'late' ? 'late arrival' : 'early leaving') + ' request', niceDay(q.date) + ', ' + q.time, id); });
+      return { id: id, status: 'Cancelled' };
+    });
+  }
+
+  /** Aakash has looked at an automatic absence and leaves it as it is: it no longer waits in Approvals. */
+  function keepAbsent(ctx, actor, id) {
+    return ctx.env.withLock(function () {
+      boss(actor);
+      var r = H.find(ctx, 'LeaveRequests', id);
+      if (!r || r.status !== H.ABSENT) H.fail('NOT_FOUND', 'Not an unannounced absence.');
+      ctx.db.update('LeaveRequests', id, { decidedBy: actor.id, decidedAt: ctx.now, decisionReason: 'Kept as absent', history: r.history.concat([{ at: ctx.now, by: actor.id, action: 'kept as absent' }]) });
+      H.audit(ctx, actor.id, 'absent.keep', id);
+      return { id: id };
+    });
+  }
+
   // ---------- Going out (owner's flow, handoff 3.8) ----------
 
   function goingOut(ctx, actor, a) {
@@ -2135,7 +2190,7 @@
         var n = ctx.db.rows('Violations').filter(function (v) { return v.personId === personId && Cal.monthKey(v.date) === key && v.disputeState !== 'removed'; }).length;
         return { month: key, violations: n, stage: Minutes.ladder(n).notice ? 'notice' : n >= 2 ? 'bonus and allowance' : n === 1 ? 'record only' : 'none' };
       }),
-      violations: violations.map(function (v) { return { id: v.id, date: v.date, rule: v.rule, source: v.source, disputeState: v.disputeState, createdAt: v.createdAt }; }),
+      violations: violations.map(function (v) { return { id: v.id, date: v.date, rule: v.rule, source: v.source, note: v.source === 'manual' ? v.note : '', disputeState: v.disputeState, createdAt: v.createdAt }; }),
       ladder: ladder,
       wouldBeDeducted: salary ? { lines: lines, total: quota.wouldBeDeducted + mm.run.wouldBeDeducted,
         label: 'Estimate as per company rules. Final salary is decided by management.' } : null
@@ -2241,7 +2296,7 @@
   }
 
   var api = { requestShort: requestShort, decideShort: decideShort, checkIn: checkIn, checkOut: checkOut, goingOut: goingOut, decideOuting: decideOuting,
-    imBack: imBack, confirmBack: confirmBack, manualCheckOut: manualCheckOut, expectedDay: expectedDay, uncovered: uncovered, decideDress: decideDress, manualCheckIn: manualCheckIn, effectOf: effectOf, hints: hints, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, liveMonth: liveMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
+    imBack: imBack, confirmBack: confirmBack, manualCheckOut: manualCheckOut, undoCheckOut: undoCheckOut, cancelShort: cancelShort, keepAbsent: keepAbsent, expectedDay: expectedDay, uncovered: uncovered, decideDress: decideDress, manualCheckIn: manualCheckIn, effectOf: effectOf, hints: hints, dressIssues: dressIssues, remindBack: remindBack, myMonth: myMonth, liveMonth: liveMonth, endOfDay: endOfDay, excuseAbsence: excuseAbsence,
     syncViolations: syncViolations };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJAttendance = api;
@@ -2394,8 +2449,8 @@
       ctx.db.update('LeaveRequests', id, patch);
       // The violations of the old version stand until the new version is decided (granted now, or by Aakash later).
       if (patch.status === 'Approved' || patch.status === 'Recorded') { H.withdrawViolations(ctx, id, 'Request edited'); H.onGranted(ctx, Object.assign({}, r, patch)); }
-      if (ev.decision === 'aakash' || ev.decision === 'special') H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'approval', 'Leave request edited', person.name + ': ' + ev.dates.join(', '), id); });
-      if (ev.decision === 'varun' || ev.decision === 'special') H.byRole(ctx, 'owner').forEach(function (o) { H.notify(ctx, o.id, 'approval', 'Leave request edited', person.name + ': ' + ev.dates.join(', '), id); });
+      if (ev.decision === 'aakash' || ev.decision === 'special') H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'approval', 'Leave request edited', person.name + ': ' + H.niceDates(ev.dates), id); });
+      if (ev.decision === 'varun' || ev.decision === 'special') H.byRole(ctx, 'owner').forEach(function (o) { H.notify(ctx, o.id, 'approval', 'Leave request edited', person.name + ': ' + H.niceDates(ev.dates), id); });
       H.audit(ctx, actor.id, 'leave.edit', id, { status: patch.status });
       return { id: id, status: patch.status, warnings: ev.warnings };
     });
@@ -2425,8 +2480,8 @@
         override: String(input.overrideReason).trim() };
       ctx.db.insert('LeaveRequests', row);
       H.audit(ctx, actor.id, 'leave.override', row.id, { reason: row.override, dates: dates });
-      H.notify(ctx, person.id, 'decision', 'Leave: Approved', dates.join(', '), row.id);
-      H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'override', 'Override by Varun', person.name + ': ' + dates.join(', '), row.id); });
+      H.notify(ctx, person.id, 'decision', 'Leave: Approved', H.niceDates(dates), row.id);
+      H.byRole(ctx, 'manager').forEach(function (m) { H.notify(ctx, m.id, 'override', 'Override by Varun', person.name + ': ' + H.niceDates(dates), row.id); });
       return { id: row.id, status: 'Approved' };
     });
   }
@@ -2832,7 +2887,7 @@
       var who = [];
       if (r.route === 'aakash' || (r.route === 'special' && r.approvals.aakash !== 'yes')) who = who.concat(H.byRole(ctx, 'manager'));
       if (r.route === 'varun' || (r.route === 'special' && r.approvals.varun !== 'yes')) who = who.concat(H.byRole(ctx, 'owner'));
-      who.forEach(function (m) { H.notify(ctx, m.id, 'reminder', 'Reminder: leave request waiting', names[r.personId] + ': ' + r.dates.join(', '), r.id); });
+      who.forEach(function (m) { H.notify(ctx, m.id, 'reminder', 'Reminder: leave request waiting', names[r.personId] + ': ' + H.niceDates(r.dates), r.id); });
       ctx.db.update('LeaveRequests', r.id, { remindedAt: ctx.now });
       n += 1;
     });
@@ -2876,7 +2931,7 @@
   function eveningBefore(ctx) {
     var tomorrow = Cal.addDays(H.today(ctx), 1), n = 0;
     ctx.db.rows('LeaveRequests').forEach(function (r) {
-      if (r.status === 'Approved' && r.dates[0] === tomorrow) n += once(ctx, r.personId, 'leave-tomorrow', r.id, 'Your leave starts tomorrow', r.dates.join(', ') + (r.kind === 'half' ? ' (half day from ' + r.halfStart + ')' : '')) ? 1 : 0;
+      if (r.status === 'Approved' && r.dates[0] === tomorrow) n += once(ctx, r.personId, 'leave-tomorrow', r.id, 'Your leave starts tomorrow', H.niceDates(r.dates) + (r.kind === 'half' ? ' (half day from ' + r.halfStart + ')' : '')) ? 1 : 0;
     });
     return n;
   }
@@ -2949,6 +3004,7 @@
       v.reasonCode = r.reasonCode; v.reasonText = r.reasonText; v.submittedAt = r.submittedAt; v.route = r.route;
       v.approvals = r.approvals; v.decisionReason = r.decisionReason; v.enteredBy = r.enteredBy ? names[r.enteredBy] : '';
       v.history = r.history; v.run = r.run; v.noticeHours = r.noticeHours;
+      if (r.route === 'special' && /^Special/.test(r.status)) v.waitingFor = [r.approvals.aakash === 'yes' ? '' : 'Aakash', r.approvals.varun === 'yes' ? '' : 'Varun'].filter(Boolean).join(' and ');
     }
     return v;
   }
@@ -3017,6 +3073,9 @@
     decideDress: function (ctx, actor, a) { return Att.decideDress(ctx, actor, a.id, !!a.confirm, Admin.recordIncident); },
     manualCheckIn: function (ctx, actor, a) { return Att.manualCheckIn(ctx, actor, a); },
     manualCheckOut: function (ctx, actor, a) { return Att.manualCheckOut(ctx, actor, a); },
+    undoCheckOut: function (ctx, actor, a) { return Att.undoCheckOut(ctx, actor, a); },
+    cancelShort: function (ctx, actor, a) { return Att.cancelShort(ctx, actor, a.id); },
+    keepAbsent: function (ctx, actor, a) { return Att.keepAbsent(ctx, actor, a.id); },
     checkOut: function (ctx, actor) { return Att.checkOut(ctx, actor); },
     goingOut: function (ctx, actor, a) { return Att.goingOut(ctx, actor, a); },
     decideOuting: function (ctx, actor, a) { return Att.decideOuting(ctx, actor, a.id, !!a.approve, a.reason); },
@@ -3028,25 +3087,34 @@
       // A staff member sees only their own month. Aakash and Varun may open anyone's.
       var personId = a.personId || actor.id;
       if (personId !== actor.id && actor.role === 'staff') throw err('FORBIDDEN', 'You can see only your own page.');
-      return Att.myMonth(ctx, personId, a.month);
+      var m = Att.myMonth(ctx, personId, a.month), items = {};
+      Admin.graceTable(ctx).forEach(function (g) { items['manual:' + g.key] = g.item; });
+      // A violation is shown with its plain name and, when Aakash recorded it, his note: the person must know what to dispute.
+      m.violations = (m.violations || []).map(function (v) { return Object.assign({}, v, { label: items[v.rule] ? 'Recorded by Aakash: ' + items[v.rule] : Core._.ruleLabel(v.rule) }); });
+      return m;
     },
     today: function (ctx, actor) {
       var date = Core._.today(ctx);
-      var mine = function (tab) { return ctx.db.rows(tab).filter(function (r) { return r.personId === actor.id && r.date === date; }); };
+      var mine = function (tab, later) { return ctx.db.rows(tab).filter(function (r) { return r.personId === actor.id && (later ? r.date >= date : r.date === date); }); };
       var punches = mine('Punches');
       var pick = function (kind) { var p = punches.filter(function (x) { return x.kind === kind; })[0]; return p ? { at: p.at, flag: p.flag } : null; };
       var outing = mine('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Approved' || o.status === 'Back'; })[0];
       return { date: date, serverTime: ctx.now, hints: Att.hints(ctx, actor.id), checkIn: pick('in'), checkOut: pick('out'),
         outing: outing ? { id: outing.id, status: outing.status, reason: outing.reason, approvedAt: outing.approvedAt, backAt: outing.backAt, minutes: outing.minutes } : null,
-        shorts: mine('ShortRequests').filter(function (q) { return q.status === 'Pending' || q.status === 'Approved' || q.status === 'Rejected'; })
-          .map(function (q) { return { id: q.id, kind: q.kind, time: q.time, status: q.status, decisionReason: q.decisionReason }; }) };
+        // Today's and all coming late / early requests, so one sent for another day does not vanish from sight.
+        shorts: mine('ShortRequests', true).filter(function (q) { return q.status === 'Pending' || q.status === 'Approved' || (q.status === 'Rejected' && q.date === date); })
+          .map(function (q) { return { id: q.id, date: q.date, kind: q.kind, time: q.time, status: q.status, decisionReason: q.decisionReason }; }) };
     },
     approvals: function (ctx, actor) {
       if (actor.role === 'staff') throw err('FORBIDDEN', 'Only Aakash or Varun.');
       var names = nameMap(ctx);
       var out = {
-        leaves: ctx.db.rows('LeaveRequests').filter(function (r) { return /^(Pending|Special)/.test(r.status); }).map(function (r) { return Object.assign(leaveView(r, names, actor), { context: Views.pendingContext(ctx, r) }); }),
-        absences: ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Absent \u2013 unannounced'; }).map(function (r) { return { id: r.id, name: names[r.personId], dates: r.dates }; }),
+        leaves: ctx.db.rows('LeaveRequests').filter(function (r) {
+          if (!/^(Pending|Special)/.test(r.status)) return false;
+          // A special request this approver has already said yes to waits for the other one, not for him.
+          return !(r.route === 'special' && r.approvals[actor.role === 'owner' ? 'varun' : 'aakash'] === 'yes');
+        }).map(function (r) { return Object.assign(leaveView(r, names, actor), { context: Views.pendingContext(ctx, r) }); }),
+        absences: ctx.db.rows('LeaveRequests').filter(function (r) { return r.status === 'Absent \u2013 unannounced' && r.decidedBy === 'system'; }).map(function (r) { return { id: r.id, name: names[r.personId], dates: r.dates }; }),
         outings: ctx.db.rows('Outings').filter(function (o) { return o.status === 'Pending' || o.status === 'Back'; }).map(function (o) {
           return { id: o.id, name: names[o.personId], status: o.status, reason: o.reason, expectedMinutes: o.expectedMinutes, requestedAt: o.requestedAt, approvedAt: o.approvedAt, backAt: o.backAt, minutes: o.minutes };
         }),
