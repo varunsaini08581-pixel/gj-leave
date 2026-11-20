@@ -31,9 +31,17 @@
     Restrictions: ['appliesTo'], LeaveRequests: ['dates', 'approvals', 'history'], MonthSheet: ['result'], Audit: ['detail']
   };
 
+  // Every cell is stored as plain text (so Sheets never turns '2026-11-25' or '09:30' into a date).
+  // These lists tell the store how to turn text back into numbers and booleans.
+  var NUM_COLS = ['pinTries', 'pinLockedUntil', 'requestedAt', 'decidedAt', 'submittedAt', 'noticeHours', 'run', 'emergencyNo',
+    'at', 'lat', 'lng', 'accuracy', 'distance', 'minutes', 'statedMinutes', 'createdAt', 'disputeAt', 'disputeDecidedAt',
+    'lockedAt', 'readAt', 'emailedAt', 'updatedAt', 'minPresent', 'fixedSalary', 'targetAllowance', 'disciplineBonus', 'dutyHours'];
+  var BOOL_COLS = ['noApproval', 'noClash', 'noQuota', 'dressExempt', 'active', 'on', 'extremeEmergency', 'penaltyEmergency',
+    'restrictionViolation', 'informed'];
+
   var SCHEMA_VERSION = 1;
 
-  var api = { TABS: TABS, JSON_COLS: JSON_COLS, SCHEMA_VERSION: SCHEMA_VERSION };
+  var api = { TABS: TABS, JSON_COLS: JSON_COLS, NUM_COLS: NUM_COLS, BOOL_COLS: BOOL_COLS, SCHEMA_VERSION: SCHEMA_VERSION };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GJSchema = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

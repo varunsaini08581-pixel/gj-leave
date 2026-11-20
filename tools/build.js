@@ -1,0 +1,24 @@
+// Developer build step (not shipped to anyone): bundles the tested modules into one
+// Apps Script file. Order matters: each module only uses the ones before it.
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.join(__dirname, '..');
+
+const ORDER = [
+  'src/rules/calendar.js', 'src/rules/clash.js', 'src/rules/leave.js', 'src/rules/minutes.js',
+  'src/server/schema.js', 'src/server/store.js', 'src/server/core.js', 'src/server/api.js',
+  'src/gas/main.js',
+];
+
+const version = require(path.join(root, 'package.json')).version;
+let out = `// GJ Leave & Attendance - server bundle v${version}\n// GENERATED FILE. Do not edit here. Edit src/ and run: node tools/build.js\n`;
+for (const file of ORDER) {
+  out += `\n// ===== ${file} =====\n` + fs.readFileSync(path.join(root, file), 'utf8');
+}
+fs.mkdirSync(path.join(root, 'apps-script'), { recursive: true });
+fs.writeFileSync(path.join(root, 'apps-script', 'Code.js'), out);
+fs.writeFileSync(path.join(root, 'apps-script', 'appsscript.json'), JSON.stringify({
+  timeZone: 'Asia/Kolkata', exceptionLogging: 'STACKDRIVER', runtimeVersion: 'V8',
+  webapp: { executeAs: 'USER_DEPLOYING', access: 'ANYONE_ANONYMOUS' },
+}, null, 2) + '\n');
+console.log('Built apps-script/Code.js (' + out.length + ' bytes)');

@@ -48,6 +48,14 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Built `src/server/core.js`: PIN (salted hash, 5 wrong tries = 15 min lock), phone binding (owner approves, one phone per person, new phone revokes old), authenticate, leave preview / submit / decide / cancel, server lock, re-check at approval ("Rejected - clash"), special approval (Aakash AND Varun), auto violations (unannounced, emergency beyond 2, restricted period), audit and notification rows.
 - Tests: 45 of 45 pass (rules + server).
 
+### 20 Nov 2026, 16:30 run - Sheet store, API, Apps Script bundle
+- `src/server/store.js`: Sheet store over a small grid interface. Every cell is plain text (dates and times never auto-convert); numbers, booleans and JSON are restored on read. `setup` creates missing tabs / adds missing columns, never removes anything, safe to run twice (tested).
+- `src/server/api.js`: single dispatcher, version gate (old cached app is refused), explicit field lists per reply. Reason of a leave is visible only to the applicant, Aakash and Varun.
+- `src/gas/main.js`: Apps Script glue (SpreadsheetApp grid, SHA-256, LockService, doPost/doGet, `setupOrUpgrade`). Not runnable in Node; kept thin on purpose. First real run happens on the test Sheet.
+- `tools/build.js` bundles everything into `apps-script/Code.js`; a test loads the bundle in a sandbox and runs setup + a call.
+- Privacy test: no reply to a staff member contains salary, PIN hash, token hash or another person's reason.
+- Tests: 53 of 53 pass.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out". Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested. If Aakash rejects it, no violation from that request.
@@ -56,8 +64,7 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 5. PIN is 4 to 6 digits.
 
 ## Next
-- Sheet store adapter + Apps Script entry (doGet/doPost), idempotent setup function, build script that bundles `src/` into `apps-script/`.
-- Short leave / late / early / going-out requests and check-in/out in the server core (uses `minutes.js`).
+- NEEDS OWNER'S CHROME: create test Sheet "GJ Leave - TEST", Extensions > Apps Script, paste `apps-script/Code.js`, run `setupOrUpgrade`, deploy as web app, Google "Allow".
+- Short leave / late / early / going-out requests and check-in/out in the server core (uses `minutes.js`), "My month" data.
 - Absent-with-no-request end-of-day job, edit-after-approval, 12-person month simulation.
-- First phone screens.
-- Needs the owner's Chrome: create test Sheet "GJ Leave - TEST", paste/deploy Apps Script, Google "Allow".
+- First phone screens (login, apply form with live result, pending list).
