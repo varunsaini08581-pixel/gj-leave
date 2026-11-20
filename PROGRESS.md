@@ -199,6 +199,9 @@ Go-live prep: real Sheet 'GJ Leave' created (id 1M72Pp0SqqNDyqO2fYLtC7tZB3BMwSQS
 ### 21 Nov 2026, 00:09 IST
 Round 19 (0/1/2/1, delta review of ab1f7f3) fixed: 4 reproducers pass (R19-4 helper made to flush and clear its cache like the real server), 462 tests.
 
+### 21 Nov 2026, 00:14 IST
+Round 20 (0/0/1/1, delta review of 4f73a0b) fixed: 2 reproducers pass. Rounds 19 (delta, 0/1/2/1) and 20 (delta, 0/0/1/1).
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.

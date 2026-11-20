@@ -1569,7 +1569,8 @@
     var orig = exceptId ? find(ctx, 'LeaveRequests', exceptId) : null, h0 = orig && (orig.history || [])[0];
     if (orig && !(h0 && h0.action === 'submitted' && h0.by === person.id)) return ev; // entered by Aakash: not counted
     var at = h0 ? h0.at : ctx.now;
-    var n = sentOnDay(ctx, person.id, at, exceptId, true); // sent before this one
+    // A new request counts every other send of the day (two sends in flight at once must count each other); an edit counts those before it.
+    var n = sentOnDay(ctx, person.id, at, exceptId, !!orig);
     if (n < 3) return ev;
     var to = n >= 5 ? 'Varun' : 'Aakash';
     ev = Object.assign({}, ev, { tooMany: n + 1, reasons: (ev.reasons || []).slice(), warnings: (ev.warnings || []).slice() });
@@ -2994,6 +2995,8 @@
           var yest = Cal.addDays(H.today(ctx), -1), old = { sundayOff: existing.sundayOff, active: existing.active !== false, noApproval: !!existing.noApproval, dutyStart: existing.dutyStart, dutyEnd: existing.dutyEnd };
           if (!past.length || past[past.length - 1].until < yest) past.push(Object.assign({ until: yest }, old));
           // Today: the new roster / records-only / active already apply, the old duty hours still do (they change from tomorrow).
+          // A second save the same day (hours were already changed today): today's entry takes the new roster / records-only / active too.
+          if (!hours && past.length && past[past.length - 1].until === H.today(ctx)) past[past.length - 1] = Object.assign({}, past[past.length - 1], { sundayOff: clean.sundayOff, active: clean.active !== false, noApproval: !!clean.noApproval });
           if (hours && (!past.length || past[past.length - 1].until < until)) past.push(Object.assign({ until: until }, old, { sundayOff: clean.sundayOff, active: clean.active !== false, noApproval: !!clean.noApproval }));
           clean.history = past;
         }

@@ -481,7 +481,8 @@
     var orig = exceptId ? find(ctx, 'LeaveRequests', exceptId) : null, h0 = orig && (orig.history || [])[0];
     if (orig && !(h0 && h0.action === 'submitted' && h0.by === person.id)) return ev; // entered by Aakash: not counted
     var at = h0 ? h0.at : ctx.now;
-    var n = sentOnDay(ctx, person.id, at, exceptId, true); // sent before this one
+    // A new request counts every other send of the day (two sends in flight at once must count each other); an edit counts those before it.
+    var n = sentOnDay(ctx, person.id, at, exceptId, !!orig);
     if (n < 3) return ev;
     var to = n >= 5 ? 'Varun' : 'Aakash';
     ev = Object.assign({}, ev, { tooMany: n + 1, reasons: (ev.reasons || []).slice(), warnings: (ev.warnings || []).slice() });

@@ -249,6 +249,8 @@
           var yest = Cal.addDays(H.today(ctx), -1), old = { sundayOff: existing.sundayOff, active: existing.active !== false, noApproval: !!existing.noApproval, dutyStart: existing.dutyStart, dutyEnd: existing.dutyEnd };
           if (!past.length || past[past.length - 1].until < yest) past.push(Object.assign({ until: yest }, old));
           // Today: the new roster / records-only / active already apply, the old duty hours still do (they change from tomorrow).
+          // A second save the same day (hours were already changed today): today's entry takes the new roster / records-only / active too.
+          if (!hours && past.length && past[past.length - 1].until === H.today(ctx)) past[past.length - 1] = Object.assign({}, past[past.length - 1], { sundayOff: clean.sundayOff, active: clean.active !== false, noApproval: !!clean.noApproval });
           if (hours && (!past.length || past[past.length - 1].until < until)) past.push(Object.assign({ until: until }, old, { sundayOff: clean.sundayOff, active: clean.active !== false, noApproval: !!clean.noApproval }));
           clean.history = past;
         }
