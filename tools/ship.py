@@ -18,7 +18,7 @@ if entry:
     s = s[:a] + '### ' + stamp + ' IST\n' + entry.strip() + '\n\n' + s[a:]
     open('PROGRESS.md', 'w').write(s)
 subprocess.run(['git', 'add', '-A'], check=True)
-full = msg + '\n\nCo-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_012NwDCQ9UhbM8XGtBZSEt6c'
+full = msg + '\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_012NwDCQ9UhbM8XGtBZSEt6c'
 subprocess.run(['git', '-c', 'user.name=Claude', '-c', 'user.email=noreply@anthropic.com', 'commit', '-q', '-m', full], check=True)
 p = subprocess.run(['git', '-c', 'push.negotiate=true', 'push', '-q', 'origin', 'main'], capture_output=True, text=True)
 st = subprocess.run(['git', 'status', '-sb'], capture_output=True, text=True).stdout.splitlines()[0]

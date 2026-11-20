@@ -227,7 +227,7 @@ test('proactive effect before sending: bank left, exhausted bank in rupees, extr
   s.db.insert('PayInfo', { personId: 'harsh', fixedSalary: 17000, targetAllowance: 0, disciplineBonus: 500, dutyHours: 9 });
   assert.deepEqual(Att.effectOf(c, 'harsh', 'late', 32).lines, ['This uses 22 min. Bank left after this: 98 min.']);
   assert.deepEqual(Att.effectOf(c, 'harsh', 'late', 8).lines, ['Inside the 10-min grace. Nothing is counted.']);
-  assert.deepEqual(Att.effectOf(c, 'harsh', 'out', 15).lines, ['Up to 15 min is free. Nothing is counted.']);
+  assert.deepEqual(Att.effectOf(c, 'harsh', 'out', 15).lines, ['Up to 15 min is free, once a day. Nothing is counted.']);
   assert.equal(Att.effectOf(c, 'harsh', 'out', 16).counted, 16);
   assert.match(Att.effectOf(c, 'harsh', 'early', 130).lines[0], /half day/);
   s.db.insert('DayMinutes', { id: 'a', personId: 'harsh', date: '2026-11-02', kind: 'early', minutes: 110, informed: true, statedMinutes: '', source: 't' });

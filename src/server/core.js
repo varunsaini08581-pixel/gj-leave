@@ -164,7 +164,7 @@
     var everyPhone = ctx.db.rows('Devices');
     // The owner's first sign-in (accepted by itself) repeated from the same phone within 15 minutes: the reply was lost,
     // nobody else could approve it. The same phone row gets a new token; the owner is told.
-    var boot = everyPhone.filter(function (d) { return d.personId === personId && d.status === 'approved' && d.decidedBy === 'bootstrap' && d.label === label && ctx.now - d.requestedAt < 15 * 60000; })[0];
+    var boot = everyPhone.filter(function (d) { return d.personId === personId && d.status === 'approved' && d.decidedBy === 'bootstrap' && !d.signedOut && d.label === label && ctx.now - d.requestedAt < 15 * 60000; })[0];
     if (p.role === 'owner' && boot) { everyPhone = [boot];
       var retry = ctx.env.randomId() + ctx.env.randomId();
       ctx.db.update('Devices', everyPhone[0].id, { tokenHash: ctx.env.sha256(retry) });
@@ -415,7 +415,8 @@
   }
 
   function previewLeave(ctx, actor, input) {
-    return evaluate(ctx, find(ctx, 'People', actor.id), input, input.editId);
+    var me = find(ctx, 'People', actor.id);
+    return requestLimit(ctx, me, actor, evaluate(ctx, me, input, input.editId), input.editId);
   }
 
   function addViolation(ctx, personId, date, rule, ref) {
@@ -462,7 +463,31 @@
     notify(ctx, v.personId, 'violation', 'Violation applies again', ruleLabel(v.rule) + ' (' + niceDates([v.date]) + '). The change that had withdrawn it was undone.', v.id);
     return true;
   }
-  var MAX_REQUESTS_PER_DAY = 6;
+  /** Leave requests the person sent on the IST day of `at` (their own sends; edits are not new requests). */
+  function sentOnDay(ctx, personId, at, exceptId) {
+    var d0 = toMs(new Date(at + IST_OFFSET_MS).toISOString().slice(0, 10), '00:00');
+    return ctx.db.rows('LeaveRequests').filter(function (x) {
+      var h = (x.history || [])[0];
+      return x.id !== exceptId && x.personId === personId && x.route !== 'system' && h && h.action === 'submitted' && h.by === personId && h.at >= d0 && h.at < d0 + 86400000;
+    }).length;
+  }
+  /**
+   * Owner, 20 Nov 2026: from the 4th request a person sends in one day, it always goes for approval and everyone sees a
+   * red warning; from the 6th it goes to Varun directly. Nothing is refused for this reason.
+   */
+  function requestLimit(ctx, person, actor, ev, exceptId) {
+    if (!ev || ev.decision === 'blocked' || actor.id !== person.id || person.role !== 'staff') return ev;
+    var n = sentOnDay(ctx, person.id, ctx.now, exceptId); // sent before this one
+    if (n < 3) return ev;
+    var to = n >= 5 ? 'Varun' : 'Aakash';
+    ev = Object.assign({}, ev, { tooMany: n + 1, reasons: (ev.reasons || []).slice(), warnings: (ev.warnings || []).slice() });
+    ev.warnings.unshift('This is request number ' + (n + 1) + ' from you today. That is too many: it goes to ' + to + ' for approval, who will check what the issue is.');
+    if (ev.decision === 'recorded') return ev;
+    if (n >= 5 && ev.decision !== 'special') ev.decision = 'varun';
+    else if (ev.decision === 'auto') ev.decision = 'aakash';
+    ev.reasons.push('Request number ' + (n + 1) + ' today from ' + person.name + '.');
+    return ev;
+  }
   var LEAVE_RULES = { 'unannounced-leave': 1, 'emergency-beyond-2': 1, 'leave-in-restricted-period': 1, 'absent-no-request': 1 };
   /**
    * Keeps the violations that come from leave rows (unannounced, 3rd emergency, restricted period,
@@ -601,10 +626,6 @@
       if (personId !== actor.id && actor.role === 'staff') fail('FORBIDDEN', 'You can apply only for yourself.');
       var person = find(ctx, 'People', personId);
       if (!person) fail('NOT_FOUND', 'No such person.');
-      // Nobody needs more than a few requests in one day; without a limit one phone could fill Aakash's alerts and the day's e-mails.
-      var day0 = toMs(today(ctx), '00:00');
-      if (actor.role === 'staff' && ctx.db.rows('LeaveRequests').filter(function (x) { return x.personId === personId && x.route !== 'system' && x.submittedAt >= day0; }).length >= MAX_REQUESTS_PER_DAY)
-        fail('BLOCKED', 'You have sent ' + MAX_REQUESTS_PER_DAY + ' requests today. Ask Aakash to enter it for you.');
       var opts = null, called = '';
       if (personId !== actor.id && input.calledAt !== undefined && input.calledAt !== '') {
         // "Called – emergency": Aakash records a phone call. Notice runs from the time of the call.
@@ -614,8 +635,10 @@
         if (ctx.now - at > 86400000) fail('BLOCKED', 'The call time must be within the last 24 hours.');
         opts = { at: at }; called = input.calledAt;
       }
-      var ev = evaluate(ctx, person, input, undefined, opts);
+      var ev = requestLimit(ctx, person, actor, evaluate(ctx, person, input, undefined, opts));
       if (ev.decision === 'blocked') fail('BLOCKED', ev.reasons.join(' '));
+      // From the 7th request of a day the request still goes to Varun's Approvals, but without another alert (one person cannot fill his alerts and e-mails).
+      var quiet = ev.tooMany > 6;
       var row = {
         id: ctx.env.randomId(), personId: personId, kind: input.kind, dates: ev.dates, halfStart: input.halfStart || '',
         reasonCode: input.reasonCode, reasonText: String(input.reasonText).trim(), submittedAt: ctx.now, noticeAt: opts ? opts.at : '', type: ev.type,
@@ -629,10 +652,10 @@
       ctx.db.insert('LeaveRequests', row);
       audit(ctx, actor.id, 'leave.submit', row.id, { status: row.status });
       if (row.status === 'Approved' || row.status === 'Recorded') onGranted(ctx, row);
-      if (row.route === 'aakash' || row.route === 'special') deciders(ctx).forEach(function (m) { if (row.route === 'special' && m.role === 'owner') return; notify(ctx, m.id, 'approval', 'Leave request', person.name + ': ' + niceDates(ev.dates), row.id); });
-      if (row.route === 'varun' || row.route === 'special') byRole(ctx, 'owner').forEach(function (o) { notify(ctx, o.id, 'approval', row.route === 'special' ? 'Special approval' : 'Leave request', person.name + ': ' + niceDates(ev.dates), row.id); });
-      notify(ctx, personId, 'decision', 'Leave: ' + row.status, niceDates(ev.dates), row.id);
-      return { id: row.id, status: row.status, warnings: ev.warnings };
+      if (!quiet && (row.route === 'aakash' || row.route === 'special')) deciders(ctx).forEach(function (m) { if (row.route === 'special' && m.role === 'owner') return; notify(ctx, m.id, 'approval', 'Leave request', person.name + ': ' + niceDates(ev.dates), row.id); });
+      if (!quiet && (row.route === 'varun' || row.route === 'special')) byRole(ctx, 'owner').forEach(function (o) { notify(ctx, o.id, 'approval', row.route === 'special' ? 'Special approval' : 'Leave request', person.name + ': ' + niceDates(ev.dates), row.id); });
+      if (!quiet) notify(ctx, personId, 'decision', 'Leave: ' + row.status, niceDates(ev.dates), row.id); // the person sees the answer on the screen anyway
+      return { id: row.id, status: row.status, warnings: ev.warnings, tooMany: ev.tooMany || 0 };
     });
   }
 
@@ -730,6 +753,7 @@
         ctx.db.update('LeaveRequests', id, { status: 'Cancelled', decisionReason: 'Absence taken back: ' + String(reason).trim(), decidedBy: actor.id, decidedAt: ctx.now,
           history: addHistory(r.history, [{ at: ctx.now, by: actor.id, action: 'absence taken back', reason: reason }]) });
         syncLeaveViolations(ctx, r.personId);
+        r.dates.forEach(function (d) { if (hooks.recountDay) hooks.recountDay(ctx, r.personId, d); });
         audit(ctx, actor.id, 'absent.cancel', id, { reason: reason });
         notify(ctx, r.personId, 'decision', 'Absence taken back', niceDates(r.dates) + ' \u2014 ' + String(reason).trim(), id);
         return { id: id, status: 'Cancelled' };
@@ -778,7 +802,7 @@
 
   var api = { REASONS: REASONS, setPin: setPin, login: login, decideDevice: decideDevice, authenticate: authenticate,
     signOut: signOut, previewLeave: previewLeave, submitLeave: submitLeave, decideLeave: decideLeave, cancelLeave: cancelLeave, toMs: toMs,
-    _: { withdrawRow: withdrawRow, reviveRow: reviveRow, removedByVarun: removedByVarun, restrictions: restrictions, rules: rules, syncLeaveViolations: syncLeaveViolations, hist: addHistory, MAX_EDITS: MAX_EDITS, toldWithdrawn: toldWithdrawn, addDays: Cal.addDays, deciders: deciders, isEmergency: isEmergency, renumberEmergencies: renumberEmergencies, niceDates: niceDates, hooks: hooks, lockedMonths: lockedMonths, assertOpen: assertOpen, stamp: stamp, fail: fail, failKeep: failKeep, closedSet: closedSet, autoDays: autoDays, markAbsent: markAbsent, hasCheckIn: hasCheckIn, dayOver: dayOver,
+    _: { sentOnDay: sentOnDay, withdrawRow: withdrawRow, reviveRow: reviveRow, removedByVarun: removedByVarun, restrictions: restrictions, rules: rules, syncLeaveViolations: syncLeaveViolations, hist: addHistory, MAX_EDITS: MAX_EDITS, toldWithdrawn: toldWithdrawn, addDays: Cal.addDays, deciders: deciders, isEmergency: isEmergency, renumberEmergencies: renumberEmergencies, niceDates: niceDates, hooks: hooks, lockedMonths: lockedMonths, assertOpen: assertOpen, stamp: stamp, fail: fail, failKeep: failKeep, closedSet: closedSet, autoDays: autoDays, markAbsent: markAbsent, hasCheckIn: hasCheckIn, dayOver: dayOver,
       withdrawViolations: withdrawViolations, GRANTED: GRANTED, ABSENT: ABSENT, HALF_DAY_MINUTES: HALF_DAY_MINUTES, settingValue: settingValue, hhmmToMin: hhmmToMin, find: find, audit: audit, notify: notify, byRole: byRole, today: today, peopleMap: peopleMap, rules: rules,
       approvedAway: approvedAway, liveLeaves: liveLeaves, IST_OFFSET_MS: IST_OFFSET_MS,
       evaluate: evaluate, onGranted: onGranted, ruleLabel: ruleLabel, STATUS_FOR: STATUS_FOR, OPEN: OPEN } };

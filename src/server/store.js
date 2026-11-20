@@ -93,9 +93,15 @@
       }
     });
     var db = open(grid);
-    if (!db.rows('Rules').length) {
-      Clash.DEFAULT_RULES.forEach(function (r) { db.insert('Rules', r); });
-      done.push('seeded Rules');
+    // The default clash rules are written once. If that first run broke off half-way, the next run adds the ones still
+    // missing; after it has completed, a rule the owner deleted is never put back.
+    var seeded = db.rows('Settings').some(function (s) { return s.key === 'rulesSeeded'; });
+    if (!seeded) {
+      var have = {}; db.rows('Rules').forEach(function (r) { have[r.id] = 1; });
+      var virgin = !db.rows('Rules').length || !db.rows('Settings').some(function (s) { return s.key === 'schemaVersion'; });
+      if (virgin) Clash.DEFAULT_RULES.forEach(function (r) { if (!have[r.id]) { db.insert('Rules', r); if (done.indexOf('seeded Rules') === -1) done.push('seeded Rules'); } });
+      db.flush && db.flush();
+      db.insert('Settings', { key: 'rulesSeeded', value: 'yes', updatedAt: '', updatedBy: 'setup' });
     }
     var row = db.rows('Settings').filter(function (s) { return s.key === 'schemaVersion'; })[0];
     if (!row) {

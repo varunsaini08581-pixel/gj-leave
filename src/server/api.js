@@ -301,6 +301,9 @@
       var photoId = own(PREPARE, action) && args ? args.photoId : '';
       return { ok: true, data: locked(ctx, function () {
         var fresh = Core.authenticate(ctx, request.personId, request.deviceToken); // the phone may have been removed meanwhile
+        // The owner's first phone is in use from here on: a repeated first sign-in is then an ordinary new phone request.
+        var firstPhone = fresh.deviceId ? ctx.db.rows('Devices').filter(function (d) { return d.id === fresh.deviceId && d.decidedBy === 'bootstrap'; })[0] : null;
+        if (firstPhone) ctx.db.update('Devices', firstPhone.id, { decidedBy: 'bootstrap-used' });
         try { return PRIVATE[action](ctx, fresh, args); }
         catch (e) { if (photoId && ctx.env.removePhoto) { try { ctx.env.removePhoto(photoId); } catch (x) { /* the file stays; nothing depends on it */ } } throw e; } // refused after the upload: the photo is not kept
       }) };

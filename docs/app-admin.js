@@ -213,6 +213,7 @@
     m = m || month();
     run(api('monthReport', { month: m })).then(function (r) {
       var cards = [back(), h('h1', {}, 'Month report'), h('p', { class: 'sub' }, monthName(m) + (r.locked ? ' · Locked' : ' · Live, not locked')), monthNav(m, V.report)];
+      if (r.damaged && r.damaged.length) cards.push(h('div', { class: 'warn' }, 'The locked result of ' + r.damaged.length + ' person(s) cannot be read (' + r.damaged.join(', ') + '): a cell in the MonthSheet tab was changed by hand. They are not shown below.'));
       r.people.forEach(function (p) {
         cards.push(h('div', { class: 'card' }, [h('div', { class: 'row' }, [h('strong', {}, p.name), h('span', { class: 'chip ' + (p.ladder.notice ? 'red' : p.ladder.bonusLost ? 'amber' : 'green') }, p.ladder.violations + ' violation(s)')]),
           h('p', { class: 'muted' }, 'Leaves ' + p.leaves.total + ' / ' + p.leaves.free + ' · Emergencies ' + p.leaves.emergencies + ' · Bank used ' + p.bank.used + ' min' + (p.bank.beyond ? ' (+' + p.bank.beyond + ' beyond)' : '')),

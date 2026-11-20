@@ -41,7 +41,8 @@
     if (!(m > 0)) return [];
     if (event.kind === 'out') {
       // Going out is always told to the in-charge (approved in the app) = informed.
-      if (m <= cfg.outFreeMinutes) return [];
+      // Owner, 20 Nov 2026: up to 15 minutes is free for ONE outing a day only (noFree marks the other short ones).
+      if (m <= cfg.outFreeMinutes && !event.noFree) return [];
       return [{ minutes: m, informed: true, raw: m }];
     }
     if (event.kind === 'early') {

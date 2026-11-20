@@ -71,3 +71,5 @@ label:has(> input.tick) { display: flex; align-items: center; min-height: 44px; 
 body, .card, .card p, .card li, h1, h2, td, th { overflow-wrap: anywhere; word-break: break-word; }
 .card, #app { min-width: 0; max-width: 100%; }
 .chip { white-space: normal; max-width: 100%; }
+
+.warn.red { background: var(--red-bg); color: var(--red); font-weight: 600; }

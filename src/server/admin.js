@@ -132,6 +132,7 @@
       // Days of a locked month that the request already has may stay; only what changes must lie in an open month.
       if (r.dates.every(function (d) { return H.lockedMonths(ctx)[Cal.monthKey(d)]; })) H.assertOpen(ctx, r.dates);
       var newDates = Array.isArray(input.dates) ? input.dates : [];
+      if (newDates.length && newDates.every(function (d) { return Cal.isDate(d) && H.lockedMonths(ctx)[Cal.monthKey(d)]; })) H.fail('BLOCKED', 'Those days are in a locked month. To give back the days of the open month, use "End this leave" or Cancel.');
       H.assertOpen(ctx, r.dates.filter(function (d) { return newDates.indexOf(d) === -1; }).concat(newDates.filter(function (d) { return r.dates.indexOf(d) === -1; })));
       // A request can be changed a limited number of times; after that it is cancelled and sent again.
       if (r.history.filter(function (x) { return x && x.action === 'edited'; }).length >= H.MAX_EDITS && actor.role === 'staff') H.fail('BLOCKED', 'This request has been changed ' + H.MAX_EDITS + ' times. Cancel it and send a new one.');
@@ -240,9 +241,12 @@
         // The roster and the active state as they were until yesterday are kept, so days already gone are
         // never judged again by what Settings say from today on.
         var changed = JSON.stringify(existing.sundayOff) !== JSON.stringify(clean.sundayOff) || (existing.active !== false) !== (clean.active !== false) || !!existing.noApproval !== !!clean.noApproval;
+        var hours = existing.dutyStart !== clean.dutyStart || existing.dutyEnd !== clean.dutyEnd;
+        if (hours) changed = true;
         if (changed) {
-          var past = Array.isArray(existing.history) ? existing.history.slice() : [], until = Cal.addDays(H.today(ctx), -1);
-          if (!past.length || past[past.length - 1].until < until) past.push({ until: until, sundayOff: existing.sundayOff, active: existing.active !== false, noApproval: !!existing.noApproval });
+          // New duty hours apply from tomorrow (today's arrival is judged by the hours of this morning); the other changes from today.
+          var past = Array.isArray(existing.history) ? existing.history.slice() : [], until = hours ? H.today(ctx) : Cal.addDays(H.today(ctx), -1);
+          if (!past.length || past[past.length - 1].until < until) past.push({ until: until, sundayOff: existing.sundayOff, active: existing.active !== false, noApproval: !!existing.noApproval, dutyStart: existing.dutyStart, dutyEnd: existing.dutyEnd });
           clean.history = past;
         }
         var before = {}; PERSON_FIELDS.forEach(function (f) { before[f] = existing[f]; });
@@ -386,7 +390,6 @@
       // are, with the closed days left out. So a closed day entered by mistake can simply be removed again.
       if (key === 'closedDays') {
         ctx.db.rows('People').forEach(function (p) {
-          if (p.role !== 'staff') return;
           changedDays.forEach(function (d) { if (H.hooks.recountDay) H.hooks.recountDay(ctx, p.id, d); });
           H.syncLeaveViolations(ctx, p.id);
           var months = {}; changedDays.forEach(function (d) { months[Cal.monthKey(d)] = 1; });

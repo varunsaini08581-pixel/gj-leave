@@ -11,6 +11,7 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Half day = any 4 h 30 min; the staff member picks the start time.
 - Notifications: email + in-app only. No push, no Firebase, no SMS.
 - 20 Nov 19:27 IST (owner, voice): going out over 15 minutes is NOT free: the whole outing comes from the 2-hour bank. The 2-hourly reminder is never sent between 00:00 and 06:00. One reminder on the evening before is fine. (Taken as: an outing of 15 minutes or less stays free; to confirm.)
+- 20 Nov 23:46 IST (owner): (1) lost owner phone: Aakash may approve the owner's new phone, AND the editor reset stays (63 confirmed). (2) Coming to work on a day of approved leave: the rule of 72 is confirmed. Sunday swaps get NO separate rule: the same rules apply to every day; the owner corrects swaps by hand. (3) Requests per day: from the 4th request a person sends in one day, everyone sees a red warning and it always goes for approval (Aakash); from the 6th it goes to Varun directly; nothing is refused. (4) The free outing (15 min or less) is free ONCE a day; other short outings of that day count whole. (5) The total limits stay as given before. Go live: 21 Nov 2026.
 
 ## Log
 ### 20 Nov 2026
@@ -189,6 +190,9 @@ Rounds 13 (0/2/5/3) and 14 (0/0/5/9) fixed: 36 reproducers pass (2 test set-ups 
 ### 20 Nov 2026, 22:27 IST
 Rounds 15 (0/1/5/3) and 16 (0/0/3/7) fixed: 28 reproducers pass (1 expectation adjusted with its reason: M1b retry time), 425 tests. Minutes of a day now derived from facts (deriveDay). Server version 9.
 
+### 20 Nov 2026, 23:56 IST
+Rounds 17 (0/0/7/4) and 18 (0/0/3/5) fixed: 29 reproducers pass. Owner decisions of 23:46 built (requests per day, free outing once a day; phone recovery and leave-day rule confirmed). 458 tests. Server version 9.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
@@ -265,6 +269,9 @@ Rounds 15 (0/1/5/3) and 16 (0/0/3/7) fixed: 28 reproducers pass (1 expectation a
 72. OPEN, for the owner (replaces 66): time away counts as "informed" because of a leave when that leave (a) existed before the arrival / leaving, (b) covered those hours (a half day only its own hours), and (c) was taken back by Aakash, Varun or a rule change on that day OR LATER. A leave the person cancelled herself, or one taken back before the day began, leaves an ordinary working day. Reason: coming to work on a day of approved leave must not earn a violation because the correction was tapped a day later.
 73. A write that fails half-way is undone completely: changed rows are put back AND the new rows that did get in are blanked again, so every action is saved whole or not at all and can be tapped again.
 74. A kept check-in photo (upload failed) belongs to one person and one day. A repeated phone request alerts once. An e-mail given up after 5 failed tries leaves an Audit row and an in-app alert for the owner. The owner's first sign-in repeated within 15 minutes from the same phone gets back in (also after `resetOwnerPhones`).
+75. Requests per day (owner 20 Nov): counted per IST day, own sends only (edits and requests Aakash enters for someone are not counted). 4th and 5th: auto-approval becomes "Pending with Aakash"; 6th and later: "Pending with Varun" (a request that needs both stays with both); a records-only person stays "Recorded" but still sees the red warning. From the 7th, no alert is sent (Varun, Aakash, the person) so one phone cannot fill the alerts and the day's e-mails; the request is still in Approvals. Replaces the hard limit of 6 in 70.
+76. Free outing once a day (owner 20 Nov): the first short outing of the day by approval time is free; any other outing of 15 min or less that day counts whole. The free outing still counts toward the "more than 2 hours away in a day" total (unchanged).
+77. Round 17/18 fixes: duty hours are kept per day (a change applies from tomorrow); a late / early request after the punch is refused; "informed because of a leave" needs the leave GRANTED before the arrival / leaving and counts only the hours it covered; one early leaving = one row while nothing is approved; outings count only inside duty hours; a violation follows its day and rule when the rows of a day change shape; a closed day clears the manager's minutes too; an edit cannot move a leave wholly into a locked month; the month lock closes waiting late / early requests BEFORE working out the result; setup adds missing default rules after a broken first run; damaged cells (DayMinutes kind, MonthSheet rows) are left out and named instead of breaking screens.
 
 ## Next
 - Owner still to answer: late/early request still PENDING when the person arrives - is "approved later = informed, rejected = not informed" right? (built this way)

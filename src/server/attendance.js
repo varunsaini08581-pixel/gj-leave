@@ -29,7 +29,8 @@
 
   /** Expected start and end of work today, moved by an approved half day at either end. */
   function expectedDay(ctx, person, date) {
-    var start = hhmmToMin(person.dutyStart), end = hhmmToMin(person.dutyEnd);
+    var then = Cal.asOn(person, date); // the duty hours the person had on that day, not the ones Settings show today
+    var start = hhmmToMin(Cal.isTime(then.dutyStart) ? then.dutyStart : person.dutyStart), end = hhmmToMin(Cal.isTime(then.dutyEnd) ? then.dutyEnd : person.dutyEnd);
     var lv = grantedLeaveOn(ctx, person.id, date);
     var win = null;
     if (lv && lv.kind === 'half' && lv.halfStart) {
@@ -53,33 +54,41 @@
     return !!p && !expectedDay(ctx, p, date).fullLeave && !Cal.isRosterOff(p, date) && !H.closedSet(ctx)[date];
   }
   /**
-   * Was the time from..to (minutes of the day) covered by a leave that had been granted and was taken back by
-   * Aakash, Varun or a rule change ON that day or LATER? Then the absence was approved leave when it happened,
-   * and it counts as "informed". A leave the person cancelled, or one taken back before the day began, leaves an
-   * ordinary working day. A half day counts only for its own hours. A leave entered only AFTER the arrival or the
-   * leaving (a mistake, a wrong person) changes nothing about what was known at that moment.
+   * How many of the minutes from..to (minutes of the day) were covered by a leave that
+   *  (a) had been GRANTED before the moment `at` (the arrival or the leaving), and
+   *  (b) was taken back by Aakash, Varun or a rule change ON that day or LATER?
+   * That time was approved leave when it happened, so it counts as "informed". A leave the person cancelled, one taken
+   * back before the day began, or one entered or approved only afterwards changes nothing. A half day covers only its
+   * own hours. Returns Infinity for a full day, else the covered minutes (0 = none).
    */
   function knownByLeave(ctx, personId, date, from, to, at) {
-    var dayStart = Core.toMs(date, '00:00');
-    var covers = function (kind, halfStart) {
-      if (kind === 'full') return true;
-      if (kind !== 'half' || !halfStart) return false;
+    var dayStart = Core.toMs(date, '00:00'), best = 0;
+    var cover = function (kind, halfStart) {
+      if (kind === 'full') return Infinity;
+      if (kind !== 'half' || !halfStart) return 0;
       var hs = hhmmToMin(halfStart);
-      return Math.min(to, hs + HALF_DAY_MINUTES) > Math.max(from, hs);
+      return Math.max(0, Math.min(to, hs + HALF_DAY_MINUTES) - Math.max(from, hs));
     };
-    return ctx.db.rows('LeaveRequests').some(function (r) {
-      if (r.personId !== personId || r.route === 'system') return false;
-      return (r.history || []).some(function (h) {
-        if (!h || h.by === personId || !(h.at >= dayStart)) return false;
-        var a = h.action || '';
-        if (a !== 'edited' && !(r.submittedAt < at)) return false;
-        if (a === 'cancelled') return r.status === 'Cancelled' && !!r.decidedAt && r.dates.indexOf(date) !== -1 && covers(r.kind, r.halfStart);
-        if (/^rejected – clash \(rule changed\)/.test(a)) return r.dates.indexOf(date) !== -1 && covers(r.kind, r.halfStart);
-        if (/^shortened/.test(a)) return !!h.from && (h.from.dates || []).indexOf(date) !== -1 && r.dates.indexOf(date) === -1;
-        if (a === 'edited') return !!h.from && /^(Approved|Recorded)$/.test(h.from.status || '') && h.from.kind === 'full' && h.from.first <= date && date <= h.from.last && r.dates.indexOf(date) === -1;
-        return false;
+    ctx.db.rows('LeaveRequests').forEach(function (r) {
+      if (r.personId !== personId || r.route === 'system') return;
+      var hist = r.history || [];
+      hist.forEach(function (h, k) {
+        if (!h || h.by === personId || !(h.at >= dayStart)) return;
+        var a = h.action || '', got = 0;
+        if (a === 'cancelled') got = r.status === 'Cancelled' && !!r.decidedAt && r.dates.indexOf(date) !== -1 ? cover(r.kind, r.halfStart) : 0;
+        else if (/^rejected – clash \(rule changed\)/.test(a)) got = r.dates.indexOf(date) !== -1 ? cover(r.kind, r.halfStart) : 0;
+        else if (/^shortened/.test(a)) got = h.from && (h.from.dates || []).indexOf(date) !== -1 && r.dates.indexOf(date) === -1 ? Infinity : 0;
+        else if (a === 'edited') got = h.from && /^(Approved|Recorded)$/.test(h.from.status || '') && h.from.kind === 'full' && h.from.first <= date && date <= h.from.last && r.dates.indexOf(date) === -1 ? Infinity : 0;
+        if (!got) return;
+        // When was it granted (as it stood just before this take-back)? The last approval after the last submit / edit; with no approval it was granted by itself at that submit / edit.
+        var s = -1, granted = 0;
+        for (var i = 0; i < k; i++) { var x = hist[i] && hist[i].action || ''; if (x === 'submitted' || x === 'edited' || /^called/.test(x) || /^override/.test(x)) { s = i; granted = hist[i].at; } else if (x === 'approved' && i > s) granted = hist[i].at; }
+        if (s === -1) granted = r.submittedAt;
+        if (!(granted < at)) return;
+        if (got > best) best = got;
       });
     });
+    return best;
   }
   function punchesToday(ctx, personId, date, kind) {
     return ctx.db.rows('Punches').filter(function (p) { return p.personId === personId && p.date === date && p.kind === kind; });
@@ -129,6 +138,7 @@
       var minutes = a.kind === 'late' ? t - day.start : day.end - t;
       if (minutes <= 0) H.fail('BLOCKED', a.kind === 'late' ? 'That time is not after your duty start.' : 'That time is not before your duty end.');
       if (minutes > Minutes.DEFAULTS.halfDayAfterMinutes) H.fail('BLOCKED', 'More than 2 hours is a half day. Please apply for a half-day leave.');
+      if (punchesToday(ctx, actor.id, date, a.kind === 'late' ? 'in' : 'out').length) H.fail('BLOCKED', a.kind === 'late' ? 'You have already checked in.' : 'You have already checked out. An early leaving can be informed only before you leave.');
       if (date === H.today(ctx)) {
         if (a.kind === 'late' && nowMin(ctx) >= day.start) H.fail('BLOCKED', 'Duty has started. A late arrival can be informed only before duty start.');
         if (a.kind === 'early' && nowMin(ctx) > t) H.fail('BLOCKED', 'That time has passed.');
@@ -216,7 +226,7 @@
 
       recountDay(ctx, actor.id, date);
       var counted = ctx.db.rows('DayMinutes').filter(function (m) { return m.personId === actor.id && m.date === date && m.kind === 'late' && m.minutes > 0; })[0] || null;
-      var late = counted ? counted.minutes : Math.min(uncovered(day.start, nowMin(ctx), day.win), uncovered(day.start, day.end, day.win));
+      var late = counted ? counted.minutes : !dayCounts(ctx, actor.id, date) ? 0 : Math.min(uncovered(day.start, nowMin(ctx), day.win), uncovered(day.start, day.end, day.win));
       H.audit(ctx, actor.id, 'punch.in', punch.id, { late: late, flag: punch.flag });
       return { id: punch.id, at: ctx.now, lateMinutes: Math.max(0, late), informed: counted ? counted.informed : null, flag: punch.flag, distance: distance };
     });
@@ -406,9 +416,12 @@
 
   /** Minutes of an outing that fall inside the person's duty hours (time after duty end is their own). */
   function outingMinutes(o, backAt, ctx) {
-    var end = backAt, p = ctx ? H.find(ctx, 'People', o.personId) : null;
-    if (p && Cal.isTime(p.dutyEnd)) end = Math.min(backAt, Core.toMs(o.date, p.dutyEnd));
-    return Math.max(0, Math.floor((end - o.approvedAt) / 60000));
+    var end = backAt, start = o.approvedAt, p = ctx ? H.find(ctx, 'People', o.personId) : null;
+    if (p) {
+      var day = expectedDay(ctx, p, o.date); // the person's own time before duty start and after duty end is not counted
+      end = Math.min(backAt, Core.toMs(o.date, minToHhmm(day.end))); start = Math.max(o.approvedAt, Core.toMs(o.date, minToHhmm(day.start)));
+    }
+    return Math.max(0, Math.floor((end - start) / 60000));
   }
 
   /** Staff taps "I'm back". The counted time ends at THIS tap, not at Aakash's confirmation. */
@@ -492,20 +505,28 @@
         var q = activeShort(ctx, id, date, 'late');
         // "Informed" only if it was applied before duty start AND Aakash approved it. Still pending: not informed for now.
         var inTime = !!q && q.submittedAt < Core.toMs(date, minToHhmm(day.start));
-        out.push({ kind: 'late', minutes: late, informed: (inTime && q.status === 'Approved') || knownByLeave(ctx, id, date, day.start, cin, pin.at),
-          statedMinutes: inTime ? hhmmToMin(q.time) - day.start : '', source: pin.id, shortId: inTime && q.status === 'Pending' ? q.id : '' });
+        var told = inTime && q.status === 'Approved', byLeave = knownByLeave(ctx, id, date, day.start, cin, pin.at);
+        // Told by an approved request: informed up to the stated time. Covered by a leave taken back that day: informed for the hours the leave covered.
+        var statedMin = told ? hhmmToMin(q.time) - day.start : (inTime ? hhmmToMin(q.time) - day.start : '');
+        if (byLeave) statedMin = byLeave === Infinity ? (told ? statedMin : '') : Math.max(told ? statedMin : 0, Math.min(late, byLeave));
+        out.push({ kind: 'late', minutes: late, informed: told || byLeave > 0, statedMinutes: statedMin, source: pin.id, shortId: inTime && q.status === 'Pending' ? q.id : '' });
       }
       if (pout) {
         var cout = minOf(pout), early = uncovered(cout, day.end, day.win);
         if (early > 0) {
-          var e = activeShort(ctx, id, date, 'early'), stated = e ? hhmmToMin(e.time) : null;
+          var e = activeShort(ctx, id, date, 'early');
+          if (e && !(e.submittedAt < pout.at)) e = null; // sent after the leaving: it cannot make the leaving informed
+          var stated = e ? hhmmToMin(e.time) : null;
           var ok = !!e && e.status === 'Approved', wait = e && e.status === 'Pending' ? e.id : '';
           var known = knownByLeave(ctx, id, date, cout, day.end, pout.at), pieces = [];
-          if (e && cout >= stated) pieces.push([early, ok, wait]);
-          else if (e) { // left before the stated time: the extra minutes are not informed
-            if (uncovered(stated, day.end, day.win) > 0) pieces.push([uncovered(stated, day.end, day.win), ok, wait]);
+          if (e && ok && cout < stated) { // approved, but left before the stated time: the extra minutes are not informed
+            if (uncovered(stated, day.end, day.win) > 0) pieces.push([uncovered(stated, day.end, day.win), true, '']);
             if (uncovered(cout, stated, day.win) > 0) pieces.push([uncovered(cout, stated, day.win), false, '']);
-          } else pieces.push([early, false, '']);
+          } else pieces.push([early, ok, wait]); // one leaving = one row while nothing is approved (pending counts as not informed for now)
+          if (known === Infinity) pieces = pieces.map(function (p) { return [p[0], true, p[2]]; });
+          else if (known > 0 && pieces.length === 1 && !pieces[0][1] && known < early) pieces = [[known, true, ''], [early - known, false, wait]];
+          else if (known > 0 && pieces.length === 1) pieces = [[pieces[0][0], true, pieces[0][2]]];
+          known = false;
           pieces.forEach(function (p) { out.push({ kind: 'early', minutes: p[0], informed: p[1] || known, statedMinutes: '', source: pout.id, shortId: p[2] }); });
         }
       }
@@ -552,6 +573,16 @@
   // ---------- Month calculation ----------
 
   /** Days on which the total away time is over 2 hours become a half day (or a full day over 4 h 30 min). */
+  /** Only the first short outing (15 min or less) of a day is free; the other short outings of that day are counted. */
+  function markFreeOuting(ctx, events) {
+    var at = {}; ctx.db.rows('Outings').forEach(function (o) { at[o.id] = o.approvedAt || o.requestedAt || 0; });
+    var byDay = {}, notFree = {};
+    events.forEach(function (e) { if (e.kind === 'out' && e.minutes > 0 && e.minutes <= Minutes.DEFAULTS.outFreeMinutes) (byDay[e.date] = byDay[e.date] || []).push(e); });
+    Object.keys(byDay).forEach(function (d) {
+      byDay[d].sort(function (a, b) { return (at[a.source] || 0) - (at[b.source] || 0); }).forEach(function (e, i) { if (i > 0) notFree[e.id] = true; });
+    });
+    return notFree; // ids of rows, never written into the rows themselves
+  }
   function splitDays(rows) {
     var byDate = {};
     rows.forEach(function (m) { (byDate[m.date] = byDate[m.date] || []).push(m); });
@@ -566,13 +597,14 @@
 
   function monthMinutes(ctx, personId, monthKey) {
     var shut = H.closedSet(ctx);
-    var rows = ctx.db.rows('DayMinutes').filter(function (m) { return m.personId === personId && Cal.monthKey(m.date) === monthKey && m.minutes > 0 && !shut[m.date]; });
+    var rows = ctx.db.rows('DayMinutes').filter(function (m) { return m.personId === personId && Cal.monthKey(m.date) === monthKey && m.minutes > 0 && !shut[m.date] && (m.kind === 'late' || m.kind === 'early' || m.kind === 'out'); }); // a kind cell damaged by hand is left out, not a crash
     var s = splitDays(rows);
+    var notFree = markFreeOuting(ctx, s.events);
     var person = H.find(ctx, 'People', personId);
     var pay = ctx.db.rows('PayInfo').filter(function (p) { return p.personId === personId; })[0];
     var dutyHours = (pay && pay.dutyHours) || (hhmmToMin(person.dutyEnd) - hhmmToMin(person.dutyStart)) / 60;
     var run = Minutes.runMonth({ salary: pay ? pay.fixedSalary : 0, dutyHours: dutyHours },
-      s.events.map(function (m) { return { kind: m.kind, minutes: m.minutes, informed: m.informed, statedMinutes: (m.statedMinutes === '' || !m.informed) ? undefined : m.statedMinutes }; }));
+      s.events.map(function (m) { return { kind: m.kind, minutes: m.minutes, informed: m.informed, noFree: !!notFree[m.id], statedMinutes: (m.statedMinutes === '' || !m.informed) ? undefined : m.statedMinutes }; }));
     // Informed minutes already beyond the bank (they decide the "extra 2 hours" violations).
     var used = 0, beyondInformed = 0;
     run.lines.forEach(function (l, i) { if (s.events[i].informed) beyondInformed += l.beyondBank; used += l.fromBank; });
@@ -606,6 +638,11 @@
     });
     var existing = ctx.db.rows('Violations').filter(function (v) {
       return v.personId === personId && Cal.monthKey(v.date) === monthKey && String(v.proof).indexOf('dm:') === 0;
+    });
+    existing.forEach(function (v) {
+      if (wanted[v.proof]) return;
+      var heir = Object.keys(wanted).filter(function (k) { return wanted[k].rule === v.rule && wanted[k].date === v.date && !existing.some(function (x) { return x.proof === k; }); })[0];
+      if (heir) ctx.db.update('Violations', v.id, { proof: heir });
     });
     existing.forEach(function (v) {
       if (wanted[v.proof]) {
@@ -696,10 +733,13 @@
   /** What a late / early / going-out request of N minutes would do to this month. Never writes. */
   function effectOf(ctx, personId, kind, minutes, date) {
     var mm = monthMinutes(ctx, personId, Cal.monthKey(date || H.today(ctx)));
-    var counted = kind === 'late' ? Math.max(0, minutes - Minutes.DEFAULTS.lateGraceMinutes) : kind === 'out' ? (minutes <= Minutes.DEFAULTS.outFreeMinutes ? 0 : minutes) : minutes;
+    var day = date || H.today(ctx);
+    var freeUsed = kind === 'out' && ctx.db.rows('DayMinutes').some(function (m) { return m.personId === personId && m.date === day && m.kind === 'out' && m.minutes > 0 && m.minutes <= Minutes.DEFAULTS.outFreeMinutes; });
+    var counted = kind === 'late' ? Math.max(0, minutes - Minutes.DEFAULTS.lateGraceMinutes) : kind === 'out' ? (minutes <= Minutes.DEFAULTS.outFreeMinutes && !freeUsed ? 0 : minutes) : minutes;
     var left = mm.run.bankLeft, lines = [];
     if (minutes > Minutes.DEFAULTS.halfDayAfterMinutes) return { counted: 0, lines: ['More than 2 hours in one day is a half day (0.5 leave), not the bank.'] };
-    if (counted === 0) lines.push(kind === 'out' ? 'Up to 15 min is free. Nothing is counted.' : 'Inside the 10-min grace. Nothing is counted.');
+    if (kind === 'out' && freeUsed && minutes <= Minutes.DEFAULTS.outFreeMinutes) lines.push('Your free outing of today is used: this one counts from the bank.');
+    if (counted === 0) lines.push(kind === 'out' ? 'Up to 15 min is free, once a day. Nothing is counted.' : 'Inside the 10-min grace. Nothing is counted.');
     else if (counted <= left) lines.push('This uses ' + counted + ' min. Bank left after this: ' + (left - counted) + ' min.');
     else {
       var beyond = counted - left;
@@ -782,6 +822,7 @@
       ctx.db.rows('Violations').forEach(function (v) {
         if (v.proof === leaveId && v.rule === 'absent-no-request') ctx.db.update('Violations', v.id, { disputeState: 'removed', note: 'Humanitarian – excused: ' + reason });
       });
+      r.dates.forEach(function (d) { recountDay(ctx, r.personId, d); }); // a late tap on that day counts nothing on an excused full-leave day
       H.audit(ctx, actor.id, 'absent.excuse', leaveId, { reason: reason });
       H.notify(ctx, r.personId, 'decision', 'Absence excused', H.niceDates(r.dates) + ': the violation is removed. The day stays as a leave day. \u2014 ' + String(reason).trim(), leaveId);
       H.byRole(ctx, 'owner').forEach(function (o) { if (o.id !== actor.id) H.notify(ctx, o.id, 'decision', 'Absence excused: ' + H.find(ctx, 'People', r.personId).name, H.niceDates(r.dates) + ' \u2014 ' + String(reason).trim() + ' (by ' + actor.name + ')', leaveId); });

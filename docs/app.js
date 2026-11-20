@@ -48,7 +48,7 @@
       if (card && cardKey(card)) anchor = { key: cardKey(card), top: card.getBoundingClientRect().top };
     }
     // The page keeps its height while parts of the new screen are still loading (the board on Today), so it cannot jump to the top.
-    app.style.minHeight = auto ? app.offsetHeight + 'px' : '';
+    app.style.minHeight = auto && state.tab === 'home' ? app.offsetHeight + 'px' : '';
     app.replaceChildren.apply(app, [].concat(nodes).filter(function (n) { return n != null && n !== false; })); tieLabels();
     if (anchor) {
       var best = null;
@@ -217,7 +217,7 @@
     }
     return false;
   }
-  function refresh() { if (state.me && !state.loading && !state.sub && (state.tab === 'home' || state.tab === 'approve') && !typing() && !state.camera) { state.auto = state.gen + 1; VIEWS[state.tab](); } }
+  function refresh() { if (state.me && !state.loading && !state.sub && (state.tab === 'home' || state.tab === 'approve') && !typing() && !state.camera) { state.autoCall = true; VIEWS[state.tab](); } }
   if (document.addEventListener) document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
   if (typeof setInterval !== 'undefined' && (!DEMO || /[?&]poll=1/.test(location.search))) setInterval(function () { if (!document.hidden) refresh(); }, 30000);
 
@@ -251,8 +251,11 @@
 
   // ---------- today ----------
   VIEWS.home = function () {
-    var wasAuto = state.auto === state.gen + 1;
+    // wasAuto: this call is the automatic refresh. seq: an answer that arrives after a newer call was made is dropped.
+    var wasAuto = !!state.autoCall, seq = state.seq = (state.seq || 0) + 1; state.autoCall = false;
     Promise.all([api('today'), api('notifications'), state.me.role !== 'staff' ? api('approvals') : null]).then(function (r) {
+      if (seq !== state.seq) return;
+      state.auto = wasAuto ? state.gen + 1 : 0;
       var t = r[0], notes = r[1].slice(-5).reverse(), ap = r[2];
       if (ap) { state.badge = ap.leaves.length + ap.outings.length + ap.devices.length + ap.absences.length + ap.shorts.length + (ap.dress || []).length; drawTabs(); }
       var cards = [h('h1', {}, 'Hello, ' + state.me.name), h('p', { class: 'sub' }, niceDate(t.date) + ' · Duty ' + state.me.dutyStart + '–' + state.me.dutyEnd)];
@@ -326,7 +329,7 @@
     var o = t.outing;
     if (!o) {
       var reason = h('input', { placeholder: 'Reason', maxlength: 80 }), mins = h('input', { type: 'number', inputmode: 'numeric', min: 1, max: 120, placeholder: 'Expected minutes' });
-      c.appendChild(h('p', { class: 'muted' }, 'Up to 15 min is free. More than 15 min: the whole outing comes from your 2-hour bank.'));
+      c.appendChild(h('p', { class: 'muted' }, 'The first outing of the day of up to 15 min is free (once a day). Any other outing, and any outing over 15 min, comes whole from your 2-hour bank.'));
       var eff = h('div', {});
       mins.addEventListener('input', function () { effectInto(eff, { kind: 'out', minutes: +mins.value }); });
       c.appendChild(reason); c.appendChild(h('div', { style: 'height:8px' })); c.appendChild(mins); c.appendChild(eff);
@@ -404,7 +407,7 @@
           var kids = [h('div', { class: 'result ' + m[0] }, p.decision === 'blocked' ? p.reasons.join(' ') : m[1] + (p.type ? ' · ' + p.type : ''))];
           if (p.decision !== 'blocked' && p.decision !== 'auto' && p.decision !== 'recorded') kids.push(h('p', { class: 'muted', style: 'margin-top:6px' }, p.reasons.join(' ')));
           (p.warnings || []).forEach(function (w) {
-            var box = h('div', { class: 'warn' }, w);
+            var box = h('div', { class: /^This is request number/.test(w) ? 'warn red' : 'warn' }, w);
             if (/extreme emergency/.test(w)) box.appendChild(button(f.extremeEmergency ? 'Marked as extreme emergency' : 'Mark as extreme emergency', 'small', function () { f.extremeEmergency = !f.extremeEmergency; preview(); }));
             kids.push(box);
           });
@@ -503,7 +506,10 @@
 
   // ---------- approvals ----------
   VIEWS.approve = function () {
+    var wasAuto = !!state.autoCall, seq = state.seq = (state.seq || 0) + 1; state.autoCall = false;
     run(api('approvals')).then(function (a) {
+      if (seq !== state.seq) return;
+      state.auto = wasAuto ? state.gen + 1 : 0;
       state.badge = a.leaves.length + a.outings.length + a.devices.length + a.absences.length + a.shorts.length + (a.dress || []).length; drawTabs();
       var cards = [h('h1', {}, 'Approvals'), h('p', { class: 'sub' }, state.badge ? state.badge + ' waiting' : 'Nothing is waiting.')];
       function decide(label, okFn, noFn) {
@@ -516,6 +522,7 @@
           h('p', {}, niceDates(r.dates) + (r.kind === 'half' ? ' · half day ' + r.halfStart : '') + ' · ' + r.type),
           h('p', { class: 'muted' }, r.reasonCode + ': ' + r.reasonText),
           r.route === 'special' ? h('p', { class: 'muted' }, 'Aakash: ' + (r.approvals.aakash || 'waiting') + ' · Varun: ' + (r.approvals.varun || 'waiting')) : null,
+          r.context && r.context.tooMany ? h('div', { class: 'warn red' }, 'Request number ' + r.context.tooMany + ' from ' + r.name + ' on that day. Too many: check what the issue is.') : null,
           r.context && r.context.ruleResult.length ? h('p', { class: 'muted' }, 'Why it needs you: ' + r.context.ruleResult.join(' ')) : null,
           r.context ? h('p', { class: 'muted' }, 'Also away: ' + (r.context.awayToo.length ? r.context.awayToo.map(function (x) { return x.name + ' (' + niceDate(x.date) + ', ' + x.why + ')'; }).join(', ') : 'nobody')) : null,
           r.context && r.context.month ? h('p', { class: 'muted' }, 'Month so far: ' + r.context.month.leaves + ' of ' + r.context.month.free + ' leaves · ' + r.context.month.emergencies + ' emergencies · bank ' + r.context.month.bankLeft + ' min left · ' + r.context.month.violations + ' violations') : null,
@@ -604,7 +611,11 @@
 
   // ---------- start ----------
   function start() {
-    return api('me').then(function (me) { state.me = me; state.offset = me.serverTime - Date.now(); try { sessionStorage.removeItem('gjleave.reloaded'); } catch (e) { /* fine */ } go('home'); }, function (e) { if (e.code !== 'AUTH') viewLogin(e.message); });
+    return api('me').then(function (me) { state.me = me; state.offset = me.serverTime - Date.now(); try { sessionStorage.removeItem('gjleave.reloaded'); } catch (e) { /* fine */ } go('home'); }, function (e) {
+      if (e.code === 'AUTH') return;
+      tabsEl.hidden = true;
+      show([h('h1', {}, 'Could not load'), h('div', { class: 'card' }, [h('p', {}, e.message || 'Check the connection and try again.'), h('div', { class: 'btns' }, [button('Try again', 'primary', function () { return start(); }), button('Sign in with PIN', '', function () { viewLogin(); })])])]);
+    });
   }
   window.GJApp = { h: h, show: show, toast: toast, api: api, run: run, button: button, confirmButton: confirmButton, whenOf: whenOf, state: state, VIEWS: VIEWS, go: go, drawTabs: drawTabs,
     niceDate: niceDate, niceDates: niceDates, timeOf: timeOf, todayStr: todayStr, addDays: addDays, statusChip: statusChip, MON: MON, RULE_TEXT: RULE_TEXT, position: position };

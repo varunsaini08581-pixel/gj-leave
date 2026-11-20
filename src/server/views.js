@@ -29,7 +29,7 @@
       var state = Cal.isRosterOff(p, date) ? 'Roster off' : leave && leave.kind === 'full' ? (leave.route === 'system' ? 'Absent' : 'On leave') : pout ? 'Checked out' : outing ? 'Out right now'
         : pin ? 'In' : now > start + 10 ? 'Not in yet – late' : 'Not in yet';
       return { id: p.id, name: p.name, group: p.group, state: state, dutyStart: p.dutyStart, dueAt: start, checkInAt: pin ? pin.at : '', checkOutAt: pout ? pout.at : '',
-        lateMinutes: Cal.isRosterOff(p, date) || (leave && leave.kind === 'full') ? 0 : pin ? Att.uncovered(start, istMin(pin.at), day.win) : (state.indexOf('late') !== -1 ? now - start : 0), photoId: pin ? pin.photoId : '', flag: pin ? pin.flag : '',
+        lateMinutes: Cal.isRosterOff(p, date) || H.closedSet(ctx)[date] || (leave && leave.kind === 'full') ? 0 : pin ? Att.uncovered(start, istMin(pin.at), day.win) : (state.indexOf('late') !== -1 ? now - start : 0), photoId: pin ? pin.photoId : '', flag: pin ? pin.flag : '',
         halfDay: leave && leave.kind === 'half' ? leave.halfStart : '', outSince: outing ? outing.approvedAt : '' };
     }) };
   }
@@ -90,6 +90,9 @@
       var m = Clash.awayOn(d, map, away);
       Object.keys(m).forEach(function (name) { if (name !== p.name && !seen[name + d]) { seen[name + d] = 1; out.awayToo.push({ name: name, date: d, why: m[name] === 'roster' ? 'roster Sunday' : 'away' }); } });
     });
+    // Owner: from the 4th request of one day, everyone sees it in red.
+    var h0 = (r.history || [])[0];
+    if (h0 && h0.action === 'submitted' && h0.by === r.personId) { var nth = H.sentOnDay(ctx, r.personId, h0.at, r.id) + 1; if (nth > 3) out.tooMany = nth; }
     var mm = Att.myMonth(ctx, p.id, Cal.monthKey(r.dates[0]));
     out.month = { leaves: mm.leaves.total, free: mm.leaves.free, emergencies: mm.leaves.emergencies, bankLeft: mm.bank.left, violations: mm.ladder.violations };
     return out;
@@ -117,7 +120,7 @@
     boss(actor);
     validMonth(monthKey);
     var locked = ctx.db.rows('MonthSheet').filter(function (r) { return r.month === monthKey; });
-    var acks = locked.filter(function (r) { return r.personId === 'lock-ack'; }).map(function (r) { return r.result.by; });
+    var acks = locked.filter(function (r) { return r.personId === 'lock-ack'; }).map(function (r) { return r.result && r.result.by ? r.result.by : 'confirmed'; });
     var rows = locked.filter(function (r) { return r.personId !== 'correction' && r.personId !== 'lock-ack'; });
     // A locked result damaged by hand is left out and named, instead of breaking the whole report.
     var bad = rows.filter(function (r) { return !(r.result && typeof r.result === 'object' && typeof r.result.name === 'string'); }).map(function (r) { return r.personId; });
@@ -125,7 +128,7 @@
     var overrides = ctx.db.rows('LeaveRequests').filter(function (r) { return r.override && Cal.monthKey(r.dates[0]) === monthKey; })
       .map(function (r) { var p = H.find(ctx, 'People', r.personId); return { personId: r.personId, name: p ? p.name : '', dates: r.dates, reason: r.override }; });
     if (rows.length) return { month: monthKey, locked: true, lockedBy: rows[0].lockedBy, lockedAt: rows[0].lockedAt, people: good.map(function (r) { return r.result; }), damaged: bad,
-      corrections: locked.filter(function (r) { return r.personId === 'correction'; }).map(function (r) { return r.result; }), overrides: overrides };
+      corrections: locked.filter(function (r) { return r.personId === 'correction' && r.result && typeof r.result.name === 'string'; }).map(function (r) { return r.result; }), overrides: overrides };
     return { month: monthKey, locked: false, lockConfirmedBy: acks, people: staffForMonth(ctx, monthKey).map(function (p) { return Att.myMonth(ctx, p.id, monthKey); }), corrections: [], overrides: overrides };
   }
 
@@ -149,6 +152,15 @@
       // The absent check of the last days of the month may not have run yet (a missed night job): it runs now, before anything is locked.
       var first = H.settingValue(ctx, 'startDate'), lastDay = monthKey + '-' + Cal.daysInMonth(monthKey);
       for (var back = 6; back >= 0; back--) { var dd = Cal.addDays(lastDay, -back); if (Cal.monthKey(dd) === monthKey && dd < H.today(ctx) && (!first || dd >= first)) Att.endOfDay(ctx, dd); }
+      // Everything else of this month that is still waiting is closed with it: nothing of a locked month can wait, or remind, for ever.
+      var inMonth = function (d) { return Cal.monthKey(d) === monthKey; };
+      ctx.db.rows('ShortRequests').forEach(function (q) { if (q.status === 'Pending' && inMonth(q.date)) { ctx.db.update('ShortRequests', q.id, { status: 'Closed', decisionReason: 'Not decided before the month was locked', decidedBy: actor.id, decidedAt: ctx.now }); if (H.hooks.recountDay) H.hooks.recountDay(ctx, q.personId, q.date); } });
+      ctx.db.rows('Outings').forEach(function (o) {
+        if (!inMonth(o.date)) return;
+        if (o.status === 'Back') ctx.db.update('Outings', o.id, { status: 'Confirmed', confirmedAt: ctx.now, confirmedBy: actor.id });
+        else if (o.status === 'Pending' || o.status === 'Approved') ctx.db.update('Outings', o.id, { status: 'Closed', decisionReason: 'Closed with the month lock' });
+      });
+      ctx.db.rows('Punches').forEach(function (x) { if (inMonth(x.date) && x.dress && !x.dressDecision && Att.dressIssues(x.dress).length) ctx.db.update('Punches', x.id, { dressDecision: 'dismissed' }); });
       var people = staffForMonth(ctx, monthKey), results = people.map(function (p) { return Att.myMonth(ctx, p.id, monthKey); });
       // A request of this month that nobody decided is closed with the month (its days are in the locked
       // result as "counted, not decided"); it must not wait, and remind Aakash, for ever.
@@ -159,15 +171,6 @@
           history: H.hist(r.history, [{ at: ctx.now, by: actor.id, action: 'closed with the month lock' }]) });
         H.notify(ctx, r.personId, 'decision', 'Leave request closed', H.niceDates(r.dates) + ' was not decided before the month was locked. Ask Aakash if a correction is needed.', r.id);
       });
-      // Everything else of this month that is still waiting is closed with it: nothing of a locked month can wait, or remind, for ever.
-      var inMonth = function (d) { return Cal.monthKey(d) === monthKey; };
-      ctx.db.rows('ShortRequests').forEach(function (q) { if (q.status === 'Pending' && inMonth(q.date)) ctx.db.update('ShortRequests', q.id, { status: 'Closed', decisionReason: 'Not decided before the month was locked', decidedBy: actor.id, decidedAt: ctx.now }); });
-      ctx.db.rows('Outings').forEach(function (o) {
-        if (!inMonth(o.date)) return;
-        if (o.status === 'Back') ctx.db.update('Outings', o.id, { status: 'Confirmed', confirmedAt: ctx.now, confirmedBy: actor.id });
-        else if (o.status === 'Pending' || o.status === 'Approved') ctx.db.update('Outings', o.id, { status: 'Closed', decisionReason: 'Closed with the month lock' });
-      });
-      ctx.db.rows('Punches').forEach(function (x) { if (inMonth(x.date) && x.dress && !x.dressDecision && Att.dressIssues(x.dress).length) ctx.db.update('Punches', x.id, { dressDecision: 'dismissed' }); });
       people.forEach(function (p, i) {
         ctx.db.insert('MonthSheet', { id: ctx.env.randomId(), month: monthKey, personId: p.id, result: results[i], lockedBy: actor.id, lockedAt: ctx.now });
       });
