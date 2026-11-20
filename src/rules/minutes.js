@@ -21,9 +21,9 @@
     passViolationEvery: 2,       // after the passes, every 2nd time = violation (5th, 7th, 9th...)
     extraViolationMinutes: 120,  // every extra 2 hours beyond the bank = 1 violation
     disciplineBonus: 500,
-    // OPEN QUESTIONS for the owner (defaults below are provisional, see PROGRESS.md):
-    over30CountsAsOccasion: false,       // Q1: does a ">30 min not informed" also use the pass counter?
-    notInformedExcessCountsForExtra: false // Q2: do not-informed minutes beyond the bank count toward "extra 2 hours"?
+    // Confirmed by the owner, 20 Nov 2026:
+    over30CountsAsOccasion: false,        // a ">30 min not informed" is its own violation, outside the pass counter
+    notInformedExcessCountsForExtra: false // "extra 2 hours beyond the bank" counts informed minutes only
   };
 
   function ratePerMinute(person) {

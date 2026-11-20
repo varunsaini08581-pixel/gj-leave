@@ -21,16 +21,22 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Built the short-leave engine `src/rules/minutes.js`: 2-hour bank, 10-min grace, going-out 15-min rule, half-day cut-off, not-informed passes, >30 min rule, extra-2-hours rule, ladder A, per-minute rate.
 - Tests: 13 of 13 pass, including the owner's six worked examples (exact match).
 
-## Open questions (provisional defaults are in code, clearly marked; nothing is final until the owner answers)
-1. A "not informed, more than 30 min" late gives an immediate violation. Does it ALSO count as one of the not-informed times (pass counter)? Default now: no.
-2. "Every extra 2 hours beyond the bank = 1 violation": do not-informed minutes beyond the bank count toward those 2 hours, or informed minutes only? Default now: informed only.
-3. Clash rules for short windows: do two people clash only when their away TIMES overlap, or whenever both are away at any time on the same DAY? Not coded yet.
-4. Away between 2 h and 4 h 30 min in one day = half day (0.5 leave); more than 4 h 30 min = full day. Told to the owner, not yet confirmed.
+### 20 Nov 2026, 16:00 - owner answers
+- A "not informed, more than 30 min" late = immediate violation and is NOT counted in the pass counter. Confirmed.
+- "Every extra 2 hours beyond the bank = 1 violation" counts informed minutes only. Confirmed.
+- Clash rules are counted PER DAY: if one person is away for any part of a day, the other person in the rule cannot be away that day at all (owner example: Bhawna 1 hour late in the morning, Pooja cannot leave early the same evening).
+- Away 2 h to 4 h 30 min = half day; more than 4 h 30 min = full day. Confirmed.
+- Built `calendar.js` (nth Sunday, roster), `clash.js` (C1, C1-Sun, C1-E, C2, C3, C4 as data, per-day), `leave.js` (notice type, month quota with roster Sundays, Anita, run length, who decides).
+- Tests: 27 of 27 pass.
+
+## To confirm with the owner (not blocking)
+1. Per-day clash also covers "Going out": if Bhawna was late today, Pooja's going-out request today is blocked too. Built this way; flagged to the owner.
+2. Emergencies: the 3rd in a month gives +1 violation. Is it also +1 for the 4th, 5th...? Not coded yet.
 
 ## Blocked
 - Repo `gj-leave`: waiting for the owner to create it and give Claude access.
 
 ## Next
-- Clash rules C1-C4 with tests in both directions (needs answer 3).
-- Notice types, quota, Anita rules, who-decides routing.
+- Restrictions (blackout periods), 3rd-emergency violation, absent-with-no-request, edit/cancel re-check.
+- 12-person month simulation against a hand count.
 - Test Sheet + Apps Script skeleton; first deploy through the owner's Chrome.
