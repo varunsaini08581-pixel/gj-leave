@@ -1652,7 +1652,7 @@
 
   var api = { REASONS: REASONS, setPin: setPin, login: login, decideDevice: decideDevice, authenticate: authenticate,
     signOut: signOut, previewLeave: previewLeave, submitLeave: submitLeave, decideLeave: decideLeave, cancelLeave: cancelLeave, toMs: toMs,
-    _: { deciders: deciders, isEmergency: isEmergency, renumberEmergencies: renumberEmergencies, niceDates: niceDates, hooks: hooks, lockedMonths: lockedMonths, assertOpen: assertOpen, stamp: stamp, fail: fail, failKeep: failKeep, closedSet: closedSet, autoDays: autoDays, markAbsent: markAbsent, hasCheckIn: hasCheckIn, dayOver: dayOver,
+    _: { addDays: Cal.addDays, deciders: deciders, isEmergency: isEmergency, renumberEmergencies: renumberEmergencies, niceDates: niceDates, hooks: hooks, lockedMonths: lockedMonths, assertOpen: assertOpen, stamp: stamp, fail: fail, failKeep: failKeep, closedSet: closedSet, autoDays: autoDays, markAbsent: markAbsent, hasCheckIn: hasCheckIn, dayOver: dayOver,
       withdrawViolations: withdrawViolations, GRANTED: GRANTED, ABSENT: ABSENT, HALF_DAY_MINUTES: HALF_DAY_MINUTES, settingValue: settingValue, hhmmToMin: hhmmToMin, find: find, audit: audit, notify: notify, byRole: byRole, today: today, peopleMap: peopleMap, rules: rules,
       approvedAway: approvedAway, liveLeaves: liveLeaves, IST_OFFSET_MS: IST_OFFSET_MS,
       evaluate: evaluate, onGranted: onGranted, ruleLabel: ruleLabel, STATUS_FOR: STATUS_FOR, OPEN: OPEN } };
@@ -3182,6 +3182,14 @@
       var names = nameMap(ctx);
       return ctx.db.rows('LeaveRequests').filter(function (r) { return /^(Pending|Special)/.test(r.status); }).map(function (r) { return leaveView(r, names, actor); });
     },
+    staffLeaves: function (ctx, actor) {
+      // Aakash / Varun: every running, coming or waiting leave, to cancel or shorten it from the phone.
+      if (actor.role === 'staff') throw err('FORBIDDEN', 'Only Aakash or Varun.');
+      var names = nameMap(ctx), day = Core._.today(ctx);
+      return ctx.db.rows('LeaveRequests').filter(function (r) {
+        return (r.status === 'Approved' || r.status === 'Recorded' || /^(Pending|Special)/.test(r.status)) && r.route !== 'system' && r.dates[r.dates.length - 1] >= Core._.addDays(day, -7);
+      }).map(function (r) { return leaveView(r, names, actor); }).sort(function (a, b) { return a.dates[0] < b.dates[0] ? -1 : 1; });
+    },
     requestShort: function (ctx, actor, a) { return Att.requestShort(ctx, actor, a); },
     effect: function (ctx, actor, a) {
       // Live preview for late / early / going out, shown before the request is sent.
@@ -3331,7 +3339,7 @@
 
   // Actions that only read. Everything else changes data and runs, from start to end, inside the server lock.
   var READ_ONLY = { me: 1, previewLeave: 1, myLeaves: 1, pending: 1, effect: 1, photo: 1, myMonth: 1, today: 1, approvals: 1, incidentItems: 1,
-    disputes: 1, getSettings: 1, restrictions: 1, board: 1, todayAtGJ: 1, calendar: 1, myRestrictions: 1, monthReport: 1, devices: 1, notifications: 1 };
+    disputes: 1, staffLeaves: 1, getSettings: 1, restrictions: 1, board: 1, todayAtGJ: 1, calendar: 1, myRestrictions: 1, monthReport: 1, devices: 1, notifications: 1 };
   var JPEG = /^data:image\/jpeg;base64,[A-Za-z0-9+\/]+=*$/;
   var TEXT_MAX = 2000, LIST_MAX = 400;
 

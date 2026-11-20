@@ -113,3 +113,18 @@ test('pending card: rule result, who else is away, the month so far; never salar
   assert.equal(cx.month.free, 5);
   assert.doesNotMatch(JSON.stringify(cx), /salary|17000/i);
 });
+
+test('staff leaves list: only Aakash and Varun; a staff member is refused', () => {
+  const Api = require('../src/server/api.js');
+  const s = seed(); const t = ['2026-11-20', '10:00'];
+  const call = (action, who, args) => Api.handle(s.ctx(...t), { action, clientVersion: 1, args: args || {}, ...(who || {}) });
+  s.db.update('People', 'varun', { pinSalt: 's', pinHash: env.sha256('s:9999') });
+  const varun = { personId: 'varun', deviceToken: call('login', null, { personId: 'varun', pin: '9999' }).data.deviceToken };
+  call('setPin', varun, { personId: 'neha', pin: '1111' });
+  const lg = call('login', null, { personId: 'neha', pin: '1111' }).data; call('decideDevice', varun, { id: lg.deviceId, approve: true });
+  const neha = { personId: 'neha', deviceToken: lg.deviceToken };
+  assert.equal(call('submitLeave', neha, leave(['2026-11-27'], { reasonCode: 'Personal work' })).ok, true);
+  assert.equal(call('staffLeaves', neha).code, 'FORBIDDEN');
+  const list = call('staffLeaves', varun).data;
+  assert.deepEqual(list.map(x => [x.name, x.dates[0]]), [['Neha', '2026-11-27']]);
+});

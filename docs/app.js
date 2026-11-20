@@ -97,7 +97,7 @@
   // ---------- API ----------
   // Answers of these calls only fill a screen. If the person has moved to another screen meanwhile, the answer is dropped.
   var READS = { today: 1, notifications: 1, approvals: 1, myMonth: 1, myLeaves: 1, myRestrictions: 1, board: 1, todayAtGJ: 1, calendar: 1, monthReport: 1, getSettings: 1,
-    restrictions: 1, incidentItems: 1, disputes: 1, devices: 1, pending: 1 };
+    restrictions: 1, incidentItems: 1, disputes: 1, devices: 1, pending: 1, staffLeaves: 1 };
   var NEVER = { then: function () { return NEVER; }, catch: function () { return NEVER; } };
   function post(body) {
     if (DEMO) return Promise.resolve().then(function () { return window.GJMock.handle(body); }).then(null, function () { var e = new Error('No connection, or the server took too long. Please try again.'); e.code = 'NET'; throw e; });

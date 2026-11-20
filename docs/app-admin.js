@@ -33,7 +33,7 @@
   // ---------- menu on the More tab ----------
   window.GJMenu = function () {
     var role = state.me.role, items = [['Today at GJ', 'gj'], ['Notifications', 'notes']];
-    if (role !== 'staff') items = items.concat([['Record a violation / incident', 'incident'], ['Enter leave for a staff member', 'enter'], ['Enter a check-in (phone or camera problem)', 'manualin'], ['Enter a forgotten check-out', 'manualout'], ['Calendar', 'calendar'],
+    if (role !== 'staff') items = items.concat([['Record a violation / incident', 'incident'], ['Enter leave for a staff member', 'enter'], ['Staff leaves: cancel or shorten', 'leaves'], ['Enter a check-in (phone or camera problem)', 'manualin'], ['Enter a forgotten check-out', 'manualout'], ['Calendar', 'calendar'],
       ['Month report', 'report'], ['Restrictions (blackout dates)', 'restrictions'], ['Set shop location', 'shop']]);
     if (role === 'owner') items = items.concat([['Disputes', 'disputes'], ['Override a rule (leave)', 'override'], ['People, duty times and pay', 'people'], ['Phones', 'phones'], ['Clash rules', 'rules'], ['Shop-closed days', 'closed'], ['Grace table', 'grace']]);
     return h('div', { class: 'card' }, [h('h2', {}, 'Menu'), h('ul', { class: 'list' }, items.map(function (it) {
@@ -170,6 +170,27 @@
   }
   V.enter = function () { leaveFor('Enter leave for staff', 'Use this when the app was down or the person called. Every rule still applies.', 'submitLeave', false); };
   V.override = function () { leaveFor('Override a rule', 'Only you can do this. It skips the clash and restriction rules, is logged, and shows in the month report.', 'overrideLeave', true); };
+
+  // ---------- staff leaves: cancel or shorten (Aakash / Varun) ----------
+  V.leaves = function () {
+    run(api('staffLeaves')).then(function (list) {
+      var today = A.todayStr();
+      var cards = [back(), h('h1', {}, 'Staff leaves'), h('p', { class: 'sub' }, 'Running, coming and waiting leaves of the last week onwards. A leave that has not started is cancelled as a whole. A leave that is running is shortened: the days already taken stay as leave.')];
+      if (!list.length) cards.push(h('div', { class: 'card' }, h('p', { class: 'muted' }, 'No leaves.')));
+      list.forEach(function (r) {
+        if (r.personId === state.me.id) return; // nobody decides on their own leave
+        var why = h('input', { placeholder: 'Reason (required)', maxlength: 120 });
+        var running = r.dates[0] < today && r.dates[r.dates.length - 1] >= today, over = r.dates[r.dates.length - 1] < today;
+        cards.push(h('div', { class: 'card' }, [h('div', { class: 'row' }, [h('strong', {}, r.name), A.statusChip(r.status, r.waitingFor)]),
+          h('p', {}, A.niceDates(r.dates) + (r.kind === 'half' ? ' · half day ' + r.halfStart : '') + ' · ' + r.type),
+          h('p', { class: 'muted' }, r.reasonCode + ': ' + r.reasonText + (r.enteredBy ? ' · entered by ' + r.enteredBy : '')), why,
+          h('div', { class: 'btns' }, A.confirmButton(running ? 'End this leave today' : over ? 'Cancel this past leave' : 'Cancel this leave', 'danger',
+            running ? 'Tap again: the days already taken stay, the rest is given back' : 'Tap again to cancel ' + A.niceDates(r.dates) + ' for ' + r.name,
+            function () { return run(api('cancelLeave', { id: r.id, reason: why.value })).then(function (x) { A.toast(x.dates ? 'Shortened to ' + A.niceDates(x.dates) + '.' : 'Cancelled.'); V.leaves(); }); }))]));
+      });
+      show(cards);
+    }).catch(function () {});
+  };
 
   // ---------- calendar ----------
   V.calendar = function (m) {
@@ -321,11 +342,29 @@
           h('p', {}, 'At least ' + r.minPresent + ' present of: ' + r.members.join(', ')),
           r.rosterSundayException ? h('p', { class: 'muted' }, 'Sunday exception: roster alone is allowed on Sunday ' + r.rosterSundayException.join(' and ')) : null,
           r.emergencyIfAllPresent ? h('p', { class: 'muted' }, 'Extreme emergency allowed only if present: ' + r.emergencyIfAllPresent.join(' and ')) : null,
-          button(r.on === false ? 'Switch on' : 'Switch off', 'small', function () { return run(api('saveRule', Object.assign({}, r, { on: r.on === false })), 'Saved.').then(V.rules); })]));
+          h('div', { class: 'btns' }, [button(r.on === false ? 'Switch on' : 'Switch off', 'small', function () { return run(api('saveRule', Object.assign({}, r, { on: r.on === false })), 'Saved.').then(function (x) { if (x.rejected && x.rejected.length) A.toast(x.rejected.length + ' approved leave(s) now clash and were marked Rejected – clash.', true); V.rules(); }); }),
+            button('Change people', 'small', function () { ruleForm(r, s.people); })])]));
       });
       show(cards);
     }).catch(function () {});
   };
+  function ruleForm(r, people) {
+    var staff = people.filter(function (p) { return p.role === 'staff' && p.active !== false; });
+    var ticks = staff.map(function (p) { var cb = h('input', { type: 'checkbox', class: 'tick' }); cb.checked = r.members.indexOf(p.name) !== -1; return { name: p.name, cb: cb }; });
+    var gone = r.members.filter(function (m) { return !staff.some(function (p) { return p.name === m; }); });
+    var min = h('input', { type: 'number', inputmode: 'numeric', min: 1, value: r.minPresent, style: 'max-width:90px' });
+    show([button('‹ Back', 'small', function () { V.rules(); }), h('h1', {}, r.id + ' · ' + r.label), h('p', { class: 'sub' }, 'Who is in this group, and how many of them must be present. Every change is logged. When someone leaves the shop, take them out here, otherwise the group cannot take leave.'),
+      gone.length ? h('div', { class: 'warn', style: 'margin:0 0 12px' }, 'No longer active: ' + gone.join(', ') + '. Saving removes them from this rule.') : null,
+      h('div', { class: 'card' }, [h('label', {}, 'People in this rule')].concat(ticks.map(function (t) { return h('label', { style: 'font-weight:400;margin:6px 0' }, [t.cb, t.name]); }))
+        .concat([field('At least this many must be present', min), h('div', { class: 'btns' }, button('Save rule', 'primary', function () {
+          var members = ticks.filter(function (t) { return t.cb.checked; }).map(function (t) { return t.name; });
+          var extra = (r.emergencyIfAllPresent || []).filter(function (n) { return staff.some(function (p) { return p.name === n; }); });
+          return run(api('saveRule', Object.assign({}, r, { members: members, minPresent: +min.value, emergencyIfAllPresent: extra.length ? extra : null })), 'Saved.').then(function (x) {
+            if (x.rejected && x.rejected.length) A.toast(x.rejected.length + ' approved leave(s) now clash and were marked Rejected – clash.', true);
+            V.rules();
+          });
+        }))]))]);
+  }
   V.grace = function () {
     run(api('getSettings')).then(function (s) {
       var rows = s.graceTable.map(function (g) {
