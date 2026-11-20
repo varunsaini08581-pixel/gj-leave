@@ -89,6 +89,12 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - All wired into the API and the Apps Script bundle. Server on the TEST deployment is still version 1 (needs a redeploy through the owner's Chrome to pick these up).
 - Tests: 88 pass.
 
+### 20 Nov 2026, 17:13 IST
+- `src/server/jobs.js`: one email digest per person (in-app only when no address; daily quota respected; never sent twice), reminder to Aakash every 2 hours for pending leave and late/early requests (hours from Settings; special approval reminds only whoever has not decided), proactive warnings once a month (bank 80%, bank used up, passes used, 1 violation, 2 violations, emergencies used), notice stage to Varun, evening-before leave reminder, end-of-day absent check + daily summary to Varun + missing check-out to Aakash.
+- Apps Script glue: jobEmails (5 min), jobHourly, jobEvening (19:00), jobEndOfDay (21:00), `installTriggers` (safe to run again). Owner email falls back to the deploying Google account.
+- Assumption: going-out requests are not in the 2-hour reminder (they need an answer in minutes; the staff member has the Remind button).
+- Tests: 96 pass.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.

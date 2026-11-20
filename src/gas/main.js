@@ -83,3 +83,31 @@ function authorizeAll() {
   ScriptApp.getProjectTriggers();
   return 'Authorized.';
 }
+
+// ---------- Timed jobs ----------
+
+function gjMailer_() {
+  return {
+    quota: function () { return MailApp.getRemainingDailyQuota(); },
+    send: function (to, subject, body) { MailApp.sendEmail(to, subject, body, { name: 'GJ Leave & Attendance' }); }
+  };
+}
+function gjJob_(name) {
+  var ctx = gjCtx_();
+  ctx.env.ownerEmail = Session.getEffectiveUser().getEmail();
+  return GJJobs.run(ctx, name, gjMailer_());
+}
+function jobEmails() { return gjJob_('emails'); }
+function jobHourly() { return gjJob_('hourly'); }
+function jobEvening() { return gjJob_('evening'); }
+function jobEndOfDay() { return gjJob_('endOfDay'); }
+
+/** Run once from the editor. Removes this project's old timers and installs the four jobs. Safe to run again. */
+function installTriggers() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('jobEmails').timeBased().everyMinutes(5).create();
+  ScriptApp.newTrigger('jobHourly').timeBased().everyHours(1).create();
+  ScriptApp.newTrigger('jobEvening').timeBased().atHour(19).everyDays(1).inTimezone('Asia/Kolkata').create();
+  ScriptApp.newTrigger('jobEndOfDay').timeBased().atHour(21).everyDays(1).inTimezone('Asia/Kolkata').create();
+  return 'Timers installed.';
+}
