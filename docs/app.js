@@ -111,6 +111,7 @@
       if (ap) { state.badge = ap.leaves.length + ap.outings.length + ap.devices.length + ap.absences.length + ap.shorts.length; drawTabs(); }
       var cards = [h('h1', {}, 'Hello, ' + state.me.name), h('p', { class: 'sub' }, niceDate(t.date) + ' · Duty ' + state.me.dutyStart + '–' + state.me.dutyEnd)];
       var tracked = state.me.role === 'staff';
+      if (!tracked && window.GJBoard) cards.push(window.GJBoard());
       if (tracked) {
         var c = h('div', { class: 'card' }, h('h2', {}, 'Attendance'));
         if (!t.checkIn) {
@@ -192,13 +193,14 @@
     var half = h('input', { type: 'time', value: f.halfStart }), toWrap = h('div', {}, [h('label', {}, 'Last day'), to]), halfWrap = h('div', { hidden: true }, [h('label', {}, 'Half day starts at (4 h 30 min)'), half]);
     var reason = h('select', {}, [h('option', { value: '' }, 'Choose a reason')].concat(state.me.reasons.map(function (r) { return h('option', { value: r }, r); })));
     var text = h('textarea', { maxlength: 200, placeholder: 'Write the reason' });
-    var result = h('div', {}), mine = h('div', {});
+    var result = h('div', {}), mine = h('div', {}), restr = h('div', {}), editId = null;
     var send = button('Send request', 'primary', function () {
-      return run(api('submitLeave', input())).then(function (r) { toast('Request: ' + r.status); VIEWS.apply(); });
+      var inp = input(); if (editId) inp.id = editId;
+      return run(api(editId ? 'editLeave' : 'submitLeave', inp)).then(function (r) { toast('Request: ' + r.status); VIEWS.apply(); });
     });
     send.disabled = true;
     function dates() { var out = []; for (var d = from.value; d && d <= (f.kind === 'half' ? from.value : to.value) && out.length < 62; d = addDays(d, 1)) out.push(d); return out; }
-    function input() { return { kind: f.kind, dates: dates(), halfStart: f.kind === 'half' ? half.value : '', reasonCode: reason.value, reasonText: text.value, extremeEmergency: f.extremeEmergency }; }
+    function input() { return { editId: editId || undefined, kind: f.kind, dates: dates(), halfStart: f.kind === 'half' ? half.value : '', reasonCode: reason.value, reasonText: text.value, extremeEmergency: f.extremeEmergency }; }
     var timer, seq = 0;
     function preview() {
       clearTimeout(timer);
@@ -229,16 +231,26 @@
     from.addEventListener('change', function () { if (to.value < from.value) to.value = from.value; preview(); });
     [to, half, reason].forEach(function (el) { el.addEventListener('change', preview); });
     text.addEventListener('input', preview);
-    show([h('h1', {}, 'Apply for leave'), h('p', { class: 'sub' }, 'Exact dates only. You will see the result before you send.'),
+    show([h('h1', {}, 'Apply for leave'), h('p', { class: 'sub' }, 'Exact dates only. You will see the result before you send.'), restr,
       h('div', { class: 'card' }, [seg, h('label', {}, f.kind === 'half' ? 'Date' : 'First day'), from, toWrap, halfWrap, h('label', {}, 'Reason'), reason, h('div', { style: 'height:8px' }), text, result, h('div', { class: 'btns' }, send)]),
       mine]);
     drawSeg();
+    api('myRestrictions').then(function (list) {
+      if (list.length) restr.replaceChildren(h('div', { class: 'warn', style: 'margin:0 0 12px' }, [h('strong', {}, 'Restricted dates'), h('ul', { class: 'list', style: 'margin-top:6px' }, list.map(function (r) {
+        return h('li', {}, niceDate(r.from) + ' to ' + niceDate(r.to) + ': ' + r.note + (r.rule === 'no-leave' ? ' (no leave)' : ' (leave counts as 1 violation)'));
+      }))]));
+    }).catch(function () {});
     api('myLeaves').then(function (list) {
       if (!list.length) return;
       mine.replaceChildren(h('div', { class: 'card' }, [h('h2', {}, 'My requests'), h('ul', { class: 'list' }, list.slice().reverse().slice(0, 20).map(function (r) {
         var li = h('li', {}, [h('div', { class: 'row' }, [h('strong', {}, niceDates(r.dates) + (r.kind === 'half' ? ' · half day ' + r.halfStart : '')), statusChip(r.status)]),
           h('div', { class: 'muted' }, r.type + (r.decisionReason ? ' · ' + r.decisionReason : '') + (r.enteredBy ? ' · entered by ' + r.enteredBy : ''))]);
-        if (r.status === 'Approved' || /^(Pending|Special)/.test(r.status)) li.appendChild(button('Cancel this request', 'small danger', function () { return run(api('cancelLeave', { id: r.id }), 'Cancelled.').then(VIEWS.apply); }));
+        if (r.status === 'Approved' || /^(Pending|Special)/.test(r.status)) {
+          li.appendChild(h('div', { class: 'btns' }, [button('Edit', 'small', function () {
+            editId = r.id; f.kind = r.kind; from.value = r.dates[0]; to.value = r.dates[r.dates.length - 1]; half.value = r.halfStart || state.me.dutyStart;
+            reason.value = r.reasonCode; text.value = r.reasonText; send.textContent = 'Save changes'; drawSeg(); window.scrollTo(0, 0); toast('Editing the request for ' + niceDates(r.dates));
+          }), button('Cancel this request', 'small danger', function () { return run(api('cancelLeave', { id: r.id }), 'Cancelled.').then(VIEWS.apply); })]));
+        }
         return li;
       }))]));
     }).catch(function () {});
@@ -265,7 +277,16 @@
       var lad = m.ladder;
       cards.push(h('div', { class: 'card' }, [h('h2', {}, 'Violations'), h('div', { class: 'row' }, [h('span', {}, 'This month'), h('span', { class: 'big' }, String(lad.violations))]),
         h('p', { class: 'muted' }, lad.violations === 0 ? 'None. 1st violation is a record only.' : lad.notice ? 'Notice stage. Varun decides.' : lad.bonusLost ? 'Rs ' + lad.bonusAmount + ' discipline bonus and target allowance would be lost. 1 more = notice.' : 'Record only. 1 more violation = discipline bonus and target allowance would be lost.'),
-        m.violations.length ? h('ul', { class: 'list' }, m.violations.map(function (v) { return h('li', {}, niceDate(v.date) + ': ' + (RULE_TEXT[v.rule] || v.rule)); })) : null]));
+        m.violations.length ? h('ul', { class: 'list' }, m.violations.map(function (v) {
+          var li = h('li', {}, niceDate(v.date) + ': ' + (RULE_TEXT[v.rule] || v.rule.replace('manual:', 'Recorded by Aakash: ')));
+          if (v.disputeState) li.appendChild(h('div', { class: 'muted' }, 'Dispute: ' + v.disputeState));
+          else if (!personId && Date.now() - v.createdAt < 86400000) {
+            var why = h('input', { placeholder: 'Why do you dispute it?', maxlength: 200 });
+            li.appendChild(why);
+            li.appendChild(button('Dispute (within 24 hours)', 'small', function () { return run(api('disputeViolation', { id: v.id, text: why.value }), 'Sent to Varun.').then(function () { VIEWS.month(); }); }));
+          }
+          return li;
+        })) : null]));
       if (m.wouldBeDeducted) cards.push(h('div', { class: 'card est' }, [h('h2', {}, m.onPayroll ? 'Would be deducted' : 'If you were on payroll'),
         h('div', { class: 'row' }, [h('span', {}, 'Estimate'), h('span', { class: 'big' }, 'Rs ' + m.wouldBeDeducted.total)]),
         h('ul', { class: 'list' }, m.wouldBeDeducted.lines.map(function (l) { return h('li', {}, l); })), h('small', {}, m.wouldBeDeducted.label)]));
@@ -339,6 +360,7 @@
           });
         })), out]));
     }
+    if (window.GJMenu) cards.push(window.GJMenu());
     cards.push(h('div', { class: 'card' }, [h('h2', {}, 'Account'), h('p', {}, state.me.name + ' · ' + state.me.group),
       h('div', { class: 'btns' }, button('Sign out', 'danger', function () { state.me = null; viewLogin(); }))]));
     show(cards);
@@ -348,6 +370,8 @@
   function start() {
     return api('me').then(function (me) { state.me = me; go('home'); }, function (e) { if (e.code !== 'AUTH') viewLogin(e.message); });
   }
+  window.GJApp = { h: h, show: show, toast: toast, api: api, run: run, button: button, state: state, VIEWS: VIEWS, go: go, drawTabs: drawTabs,
+    niceDate: niceDate, niceDates: niceDates, timeOf: timeOf, todayStr: todayStr, addDays: addDays, statusChip: statusChip, MON: MON, RULE_TEXT: RULE_TEXT, position: position };
   function boot() { if (state.session.deviceToken) start(); else viewLogin(); }
   if (DEMO) { var s = document.createElement('script'); s.src = 'mock-server.js'; s.onload = boot; document.body.appendChild(s); } else boot();
 })();

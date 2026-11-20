@@ -95,6 +95,12 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - Assumption: going-out requests are not in the 2-hour reminder (they need an answer in minutes; the staff member has the Remind button).
 - Tests: 96 pass.
 
+### 20 Nov 2026, 17:18 IST
+- Phone app: `docs/app-admin.js` with all Aakash / Varun screens (Shop today board on the Today tab, Record incident, Enter leave for staff, Calendar with clash-risk days, Month report + lock + corrections, Restrictions, Set shop location) and owner screens (Disputes, Override, People + duty + salary structure, Clash rules on/off, Grace table). Staff: Edit a request, restricted dates shown on the apply form, Dispute button on a violation (24 h), Today at GJ, Notifications, late/early shows Pending / Approved / Rejected.
+- Notifications now use readable violation names instead of rule keys.
+- `tools/ui-check2.py`: phone-size run through every management screen in demo mode (3 users, 20+ screens). 0 console errors. `tools/ui-check.py` still passes.
+- Tests: 96 pass.
+
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
 2. Auto violations for a leave (unannounced / 3rd+ emergency / restricted period) are recorded when the leave is GRANTED, not when it is only requested.
