@@ -20,6 +20,7 @@ Separate app. Not part of GJ App / stock system. Nothing of that system is opene
 - People copied from TEST (names, groups, roles, duty hours, roster Sundays, flags) WITHOUT PINs and WITHOUT salary; Aakash e-mail aakashsaini49736@gmail.com (owner gave it without ".com"; taken as gmail.com).
 - Still with the owner: his own PIN (Sheet menu GJ Leave > Set owner PIN), staff PINs (app), salaries (app Settings), confirm whether anyone's duty / roster changed.
 - To update the live server: paste apps-script/Code.js into the "GJ Leave" project, save, Deploy > Manage deployments > edit > New version > Deploy (the URL stays). Run setupOrUpgrade first when the schema changed.
+- 21 Nov 15:12 IST: owner has not given the team anything yet; asked for a new A-to-Z manual. Built tools/team-manual.py (staff + Aakash, 9 pages) and tools/owner-manual.py (owner only, 6 pages, with today's setup steps). They replace the staff guide and owner page; fixed the old guide's error that staff create their own PIN (the owner creates PINs: More > Set a PIN > WhatsApp).
 
 ## Log
 ### 20 Nov 2026
@@ -212,6 +213,9 @@ Round 20 (0/0/1/1, delta review of 4f73a0b) fixed: 2 reproducers pass. Rounds 19
 
 ### 21 Nov 2026, 00:26 IST
 LIVE: Sheet 'GJ Leave' set up, web app deployed, timers installed, staff list copied without PINs or salary. docs/config.js now points at the live server.
+
+### 21 Nov 2026, 15:18 IST
+New manuals: Team Manual (9 pages) and Owner Manual (6 pages) replace the staff guide and owner page.
 
 ## Assumptions made in code (to show the owner together, not blocking)
 1. Per-day clash also covers "Going out" and planned late/early. Flagged to the owner twice, no objection.
